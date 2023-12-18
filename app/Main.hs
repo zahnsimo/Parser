@@ -1,3 +1,5 @@
+{-# LANGUAGE FlexibleContexts #-}
+
 module Main where
 
 import Prelude hiding (lookup)
@@ -5,12 +7,13 @@ import Data.Map.Strict hiding (map, filter)--as Map
 import Control.Monad.Reader
 import Data.List hiding (lookup)
 import Data.Maybe
+import Data.Either
+import Control.Monad.Except
 
-
----------------------types-----------------------
+--------------------types-----------------------
 
 type NT = Int
-type T = Char
+type T = String --Char
 
 data RuleChar = NTChar NT  | TChar T
   deriving (Show, Eq)
@@ -21,15 +24,22 @@ newtype Rule = Rule (NT, [RuleChar])
 
 data Grammar = Grammar {
       n     :: Int    -- number of NTs -> assumed as [0..n-1]
-    , ts    :: [Char] --[String]
+    , ts    :: [T]
+    --ts = findTs . rules
+    --start
     , rules :: [(Int,Rule)]
                        }
   deriving Show
 
+--ts :: Grammar -> [T]
 
-type Table = Map (Int, Maybe Char) (Int, Rule)
 
-data TableError = NonDeterministic 
+type Table = Map (NT, Maybe T) (Int, Rule)
+
+data TableError = NonDeterministic ((NT, Maybe T), [Int]) | InfiniteLoop (NT, Maybe T)
+  deriving Show
+data ParseError = UnexpectedCharacter | StringTooShort | StringTooLong | NoRule
+  deriving Show
 
 ---------------------basics grammar fcts---------------------
 
@@ -39,109 +49,154 @@ checkGrammar (Grammar n ts rules) = all (\ (Rule (i, ls)) -> i < n &&
                                                                   TChar s  -> s `elem` ts) ls)
                                     $ map snd rules
 
-charToSymbol :: [Char] -> [Char] -> Char -> Maybe RuleChar
-charToSymbol nstr tstr c = case (c `elemIndex` nstr, c `elemIndex` tstr) of
-                         (Just i, Just j)   -> error "Overlap in NTs and Ts"
-                         (Just i , Nothing) -> Just (NTChar i)
-                         (Nothing, Just _)  -> Just (TChar c)
-                         (Nothing, Nothing) -> Nothing
 
+rmdups :: (Eq a, Ord a) => [a] -> [a]
+rmdups xs = map head $ groupBy (\ x y -> x == y) $ sort xs
 
-stringToRule :: [Char] -> [Char] -> (Char, String) -> Rule
-stringToRule nstr tstr r = case (elemIndex (fst r) nstr , mapM (charToSymbol nstr tstr) (snd r)) of
-                            (Just i, Just s)   -> Rule (i, s)
-                            (Just i, Nothing)  -> error "Rule (RHS) contains character that is neither NT nor T"
-                            (Nothing, Just s)  -> error "Rule (LHS) is not an NT"
-                            (Nothing, Nothing) -> error "Rule (LHS & RHS) contains character that is neither NT nor T"
+convertToRuleChars :: [Char] -> String -> [RuleChar]
+convertToRuleChars ntStr rStr = let (a,b) = break (\ c -> c `elem` ntStr) rStr
+                                    in case (a, b) of
+                                         ([], []) -> []
+                                         (a, []) -> [TChar a]
+                                         ([], c:cs) -> (NTChar (fromJust $ elemIndex c ntStr)) : convertToRuleChars ntStr cs
+                                         (a, c:cs) -> (TChar a) : (NTChar (fromJust $ elemIndex c ntStr)): convertToRuleChars ntStr cs
 
+stringToRule :: [Char] -> (Char, String) -> Rule
+stringToRule ntStr (c, rStr) = case elemIndex c ntStr of
+                                 Just i -> Rule (i, convertToRuleChars ntStr rStr)
+                                 Nothing -> error "blub"
 
-mkGrammar :: [Char] -> [Char] -> [(Char,String)] -> Grammar
-mkGrammar nstr tstr rstr | any (\ c -> c `elem` tstr) nstr = error "Overlap in NTs and Ts"
-                         | otherwise = let n   = length nstr 
-                                           ts  = tstr
-                                           rules = zip [0..] $ map (stringToRule nstr tstr) rstr
-                                       in (Grammar n ts rules)
+toT :: RuleChar -> Maybe T
+toT (NTChar i) = Nothing
+toT (TChar s) = Just s
 
+findTs :: [(Int, Rule)] -> [T]
+findTs rules = rmdups $ catMaybes $ map toT =<< map (\ (k, Rule (j, rhs)) -> rhs) rules
+
+--- makes Grammar from list of nonterminals and list of rules
+mkGrammar :: [Char] -> [(Char, String)] -> Grammar
+mkGrammar ntStr rStrs = let n = length ntStr
+                            rules = zip [0..] $ map (stringToRule ntStr) rStrs
+                            ts = findTs rules
+                         in (Grammar n ts rules)
+
+--- makes Grammar only from list of rules (assumes the nonterminals are all symbols on lhs of rules)
+mkGrammarFromRules :: [(Char, String)] -> Grammar
+mkGrammarFromRules rStrs = let ntStr = rmdups $ map fst rStrs
+                           in mkGrammar ntStr rStrs 
 
 ------------------------mkTable---------------------------------------------------
 
-findRulesWithLevel :: Int -> (NT, Maybe T) -> Reader Grammar [(Int, Rule)]
-findRulesWithLevel 0 _ = error "Infinite loop"
+findRulesWithLevel :: (Monad m, MonadReader Grammar m, MonadError TableError m)
+  => Int -> (NT, Maybe T) -> m [(Int, Rule)]
+findRulesWithLevel 0 (i,c) = throwError $ InfiniteLoop (i,c)
 findRulesWithLevel l (i, Just c)
-  = do gr <- ask
-       rules <- asks rules
-       let rls = filter helper rules
-             where helper (_, Rule (j,[])) = False
-                   helper (_ , Rule (j,s)) = case (i == j, head s) of
-                     (True, TChar c') -> c == c'
-                     (True, NTChar k) -> runReader (findRulesWithLevel (l-1) (k, Just c)) gr /= []
-                     (False, _ )  -> False
-        in return rls
+  = do rules <- asks rules
+       filterM helper rules
+         where helper (_, Rule (j,[])) = return False
+               helper (_ , Rule (j,s)) = do case (i == j, head s) of
+                                              (True, TChar c') -> return $ c == c'
+                                              (True, NTChar k) -> do next_level <- findRulesWithLevel (l-1) (k, Just c)
+                                                                     return (next_level /= [])
+                                              (False, _ )  -> return False
+
 findRulesWithLevel l (i, Nothing)
-  = do gr <- ask
-       rules <- asks rules
-       let rls = filter helper rules
-             where helper (_, Rule (j, s)) = case (i == j) of
-                     False -> False
-                     True -> helper2 s
-                       where helper2 [] = True
-                             helper2 (TChar c : s) = False
-                             helper2 (NTChar k : s) = runReader (findRulesWithLevel (l-1) (k, Nothing)) gr /= [] && helper2 s
-        in return rls
-                   
+  = do rules <- asks rules
+       filterM helper rules
+         where
+           helper (_, Rule (j, s)) = if i == j then helper2 s else return False
+           helper2 s = case s of
+             [] -> return True
+             ((TChar c):xs)  -> return False
+             ((NTChar k):xs) -> do next_level <- findRulesWithLevel (l-1) (k, Nothing)
+                                   if next_level /= [] then helper2 xs else return False
 
-findRules :: (NT, Maybe T) -> Reader Grammar [(Int, Rule)]
-findRules (i,c) = do gr <- ask
-                     lmax <- asks (length . rules)
-                     return $ runReader (findRulesWithLevel lmax (i,c)) gr
-
-mkTable :: Grammar -> Table --Either TableError Table
-mkTable gr@(Grammar n ts rules) = fromList $ catMaybes $ map helper ([(i,Just c) | i <- [0..(n-1)] , c <- ts] ++ [(i, Nothing) | i <- [0..(n-1)]])
-  where helper (i,c) = let rls = runReader (findRules (i,c)) gr
-                       in case length rls of 0 -> Nothing
-                                             1 -> Just ((i,c), head rls)
-                                             _ -> error "Table is nondeterministic (multiple fitting rules)"
+findRules :: (Monad m, MonadReader Grammar m, MonadError TableError m)
+  => (NT, Maybe T) -> m [(Int, Rule)]
+findRules (i,c) = do lmax <- asks (length . rules)
+                     findRulesWithLevel lmax (i,c)
 
 
----------------------parse------------------------------------
 
-chooseRule :: NT -> Maybe T -> Reader Table (Maybe (Int, Rule))
-chooseRule i (Just c) = do r <- asks $ lookup (i, Just c)
-                           case r of Just _  -> return r
-                                     Nothing -> chooseRule i Nothing
-chooseRule i Nothing = do r <- asks $ lookup (i, Nothing)
-                          case r of Just _  -> return r
-                                    Nothing -> return Nothing
-  
-parse :: String -> Reader Table [Int]
+mkTable :: (Monad m, MonadError TableError m)
+  => Grammar -> m Table
+mkTable gr@(Grammar n ts rules)
+ = fromList <$> catMaybes <$>
+  traverse helper [(i, c) | i <- [0..(n-1)] , c <- Nothing : map Just ts]
+  where helper (i,c) = do rls <- runReaderT (findRules (i,c)) gr
+                          case rls of [] -> return Nothing
+                                      [x] -> return $ Just ((i,c), x)
+                                      ls ->  throwError $ NonDeterministic ((i,c), map fst ls)
+
+-- ---------------------parse------------------------------------
+
+isPrefix :: String -> String -> Bool
+isPrefix [] _ = True
+isPrefix _ [] = False
+isPrefix (c:s) (c':s') = c == c' && isPrefix s s'
+
+removePrefix :: String -> String -> Maybe String
+removePrefix [] s = Just s
+removePrefix (c:s) [] = Nothing
+removePrefix (c:s) (c':s') = case c == c' of True -> removePrefix s s'
+                                             False -> Nothing
+
+chooseRuleHelper :: (Monad m, MonadReader Table m, MonadError ParseError m) =>
+  NT -> [T] -> m (Maybe (Int, Rule))
+chooseRuleHelper i (t:ts) = do r <- asks $ lookup (i, Just t)
+                               case r of Just _ -> return r
+                                         Nothing -> chooseRuleHelper i ts
+chooseRuleHelper _ [] = return Nothing
+
+chooseRuleNew :: (Monad m, MonadReader Table m, MonadError ParseError m) =>
+  NT -> String -> m (Maybe (Int, Rule))
+chooseRuleNew i s = do ts <- asks $ catMaybes . map snd . keys
+                       let prefixes = sortBy (\ p p' -> compare (length p') (length p))
+                                       $ filter (\ p -> isPrefix p s) ts
+                       chooseRuleHelper i prefixes
+                       
+
+-- --chooseRule :: NT -> Maybe T -> Reader Table (Maybe (Int, Rule))
+-- -- chooseRule i (Just c) = do r <- asks $ lookup (i, Just c)
+-- --                            case r of Just _  -> return r
+-- --                                      Nothing -> chooseRule i Nothing
+-- -- chooseRule i Nothing = do r <- asks $ lookup (i, Nothing)
+-- --                           case r of Just _  -> return r
+-- --                                     Nothing -> return Nothing
+
+-- --chooseRule i c = asks $ lookup (i, c)
+
+parse :: (Monad m, MonadReader Table m, MonadError ParseError m) =>
+  String -> m [Int]
 parse = parseWithStack [NTChar 0]
 
-parseWithStack :: [RuleChar] -> String -> Reader Table [Int]
-parseWithStack (TChar c : xs) (c':s) = case c == c' of
-  True -> parseWithStack xs s
-  False -> error "Unexpected character"
-parseWithStack (TChar c : xs) [] = error "String ended too early"
-parseWithStack (NTChar i : xs) (c:s) = do
-  r <- chooseRule i (Just c)
-  case r of Just (k, Rule (j, ls)) -> do rest <- parseWithStack (ls ++ xs) (c:s)
-                                         return (k:rest)
-            Nothing -> error "there is no rule for this state"
-parseWithStack (NTChar i :xs) [] = do
-  r <- chooseRule i Nothing
+parseWithStack :: (Monad m, MonadReader Table m, MonadError ParseError m) =>
+  [RuleChar] -> String -> m [Int]
+parseWithStack (TChar c : xs) s = case removePrefix c s of
+  Just s' -> parseWithStack xs s'
+  Nothing -> throwError UnexpectedCharacter
+parseWithStack (NTChar i :xs) "" = do
+  r <- chooseRuleNew i ""
   case r of Just (k, Rule (j, ls)) -> do rest <- parseWithStack (ls ++ xs) []
                                          return (k:rest)
-            Nothing -> error "String ended too early"
+            Nothing -> throwError StringTooShort
+parseWithStack (NTChar i : xs) s = do
+  r <- chooseRuleNew i s
+  case r of Just (k, Rule (j, ls)) -> do rest <- parseWithStack (ls ++ xs) s
+                                         return (k:rest)
+            Nothing -> throwError NoRule
 parseWithStack [] [] = return []
-parseWithStack [] _ = error "String too long"
+parseWithStack [] _ = throwError StringTooLong
 
 
-testG = mkGrammar "ST" "()a+" [('S', "T"), ('S', "(S+T)"), ('T', "a")]
+testG = mkGrammar "ST" [('S', "T"), ('S', "(S+T)"), ('T', "a")]
 
-testT = mkTable testG
+testT = case runExcept $ mkTable testG of Right t -> t
+                                          Left e -> error $ show e
 
 main = do
   s <- getLine
-  let rules = runReader (parse s) testT
-  print rules
-  --print ""
+  let rules = runExceptT $ runReaderT (parse s) testT
+  print $ fromRight undefined $ rules
+  print ""
 
