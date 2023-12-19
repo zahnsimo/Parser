@@ -3,35 +3,18 @@
 module Main where
 
 import Prelude hiding (lookup)
-import Data.Map.Strict hiding (map, filter)--as Map
+import Data.Map.Strict hiding (map, filter, take, splitAt)--as Map
 import Control.Monad.Reader
 import Data.List hiding (lookup)
 import Data.Maybe
 import Data.Either
 import Control.Monad.Except
 
+import Data.Tree
+
+import Grammar
+
 --------------------types-----------------------
-
-type NT = Int
-type T = String --Char
-
-data RuleChar = NTChar NT  | TChar T
-  deriving (Show, Eq)
-
-newtype Rule = Rule (NT, [RuleChar])
-  deriving (Show, Eq)
-
-
-data Grammar = Grammar {
-      n     :: Int    -- number of NTs -> assumed as [0..n-1]
-    , ts    :: [T]
-    --ts = findTs . rules
-    --start
-    , rules :: [(Int,Rule)]
-                       }
-  deriving Show
-
---ts :: Grammar -> [T]
 
 
 type Table = Map (NT, Maybe T) (Int, Rule)
@@ -41,49 +24,6 @@ data TableError = NonDeterministic ((NT, Maybe T), [Int]) | InfiniteLoop (NT, Ma
 data ParseError = UnexpectedCharacter | StringTooShort | StringTooLong | NoRule
   deriving Show
 
----------------------basics grammar fcts---------------------
-
-checkGrammar :: Grammar -> Bool
-checkGrammar (Grammar n ts rules) = all (\ (Rule (i, ls)) -> i < n &&
-                                            all (\ s -> case s of NTChar j -> j < n
-                                                                  TChar s  -> s `elem` ts) ls)
-                                    $ map snd rules
-
-
-rmdups :: (Eq a, Ord a) => [a] -> [a]
-rmdups xs = map head $ groupBy (\ x y -> x == y) $ sort xs
-
-convertToRuleChars :: [Char] -> String -> [RuleChar]
-convertToRuleChars ntStr rStr = let (a,b) = break (\ c -> c `elem` ntStr) rStr
-                                    in case (a, b) of
-                                         ([], []) -> []
-                                         (a, []) -> [TChar a]
-                                         ([], c:cs) -> (NTChar (fromJust $ elemIndex c ntStr)) : convertToRuleChars ntStr cs
-                                         (a, c:cs) -> (TChar a) : (NTChar (fromJust $ elemIndex c ntStr)): convertToRuleChars ntStr cs
-
-stringToRule :: [Char] -> (Char, String) -> Rule
-stringToRule ntStr (c, rStr) = case elemIndex c ntStr of
-                                 Just i -> Rule (i, convertToRuleChars ntStr rStr)
-                                 Nothing -> error "blub"
-
-toT :: RuleChar -> Maybe T
-toT (NTChar i) = Nothing
-toT (TChar s) = Just s
-
-findTs :: [(Int, Rule)] -> [T]
-findTs rules = rmdups $ catMaybes $ map toT =<< map (\ (k, Rule (j, rhs)) -> rhs) rules
-
---- makes Grammar from list of nonterminals and list of rules
-mkGrammar :: [Char] -> [(Char, String)] -> Grammar
-mkGrammar ntStr rStrs = let n = length ntStr
-                            rules = zip [0..] $ map (stringToRule ntStr) rStrs
-                            ts = findTs rules
-                         in (Grammar n ts rules)
-
---- makes Grammar only from list of rules (assumes the nonterminals are all symbols on lhs of rules)
-mkGrammarFromRules :: [(Char, String)] -> Grammar
-mkGrammarFromRules rStrs = let ntStr = rmdups $ map fst rStrs
-                           in mkGrammar ntStr rStrs 
 
 ------------------------mkTable---------------------------------------------------
 
@@ -94,11 +34,12 @@ findRulesWithLevel l (i, Just c)
   = do rules <- asks rules
        filterM helper rules
          where helper (_, Rule (j,[])) = return False
-               helper (_ , Rule (j,s)) = do case (i == j, head s) of
-                                              (True, TChar c') -> return $ c == c'
-                                              (True, NTChar k) -> do next_level <- findRulesWithLevel (l-1) (k, Just c)
-                                                                     return (next_level /= [])
-                                              (False, _ )  -> return False
+               helper (_ , Rule (j,s))
+                 = do case (i == j, head s) of
+                        (True, TChar c') -> return $ c == c'
+                        (True, NTChar k) -> do next_level <- findRulesWithLevel (l-1) (k, Just c)
+                                               return (next_level /= [])
+                        (False, _ )  -> return False
 
 findRulesWithLevel l (i, Nothing)
   = do rules <- asks rules
@@ -167,27 +108,43 @@ chooseRuleNew i s = do ts <- asks $ catMaybes . map snd . keys
 -- --chooseRule i c = asks $ lookup (i, c)
 
 parse :: (Monad m, MonadReader Table m, MonadError ParseError m) =>
-  String -> m [Int]
+  String -> m [(Int, Rule)] --m [Int]
 parse = parseWithStack [NTChar 0]
 
 parseWithStack :: (Monad m, MonadReader Table m, MonadError ParseError m) =>
-  [RuleChar] -> String -> m [Int]
+  [RuleChar] -> String -> m [(Int, Rule)] --m [Int]
 parseWithStack (TChar c : xs) s = case removePrefix c s of
   Just s' -> parseWithStack xs s'
   Nothing -> throwError UnexpectedCharacter
 parseWithStack (NTChar i :xs) "" = do
   r <- chooseRuleNew i ""
-  case r of Just (k, Rule (j, ls)) -> do rest <- parseWithStack (ls ++ xs) []
-                                         return (k:rest)
+  case r of Just (k, r@(Rule (j, ls))) -> do rest <- parseWithStack (ls ++ xs) []
+                                             return ((k, r):rest)
             Nothing -> throwError StringTooShort
 parseWithStack (NTChar i : xs) s = do
   r <- chooseRuleNew i s
-  case r of Just (k, Rule (j, ls)) -> do rest <- parseWithStack (ls ++ xs) s
-                                         return (k:rest)
+  case r of Just (k, r@(Rule (j, ls))) -> do rest <- parseWithStack (ls ++ xs) s
+                                             return ((k, r):rest)
             Nothing -> throwError NoRule
 parseWithStack [] [] = return []
 parseWithStack [] _ = throwError StringTooLong
 
+
+
+mkTreeWithStack :: [(Int,Rule)] -> [ParseTree] -> ParseTree
+mkTreeWithStack (r:rs) trees = do let rule = snd r
+                                  let children = countChildren rule
+                                  case children of 0 -> do let newNode = Node (fst r) []
+                                                           mkTreeWithStack rs (newNode:trees)
+                                                   i -> do let (subforest, rest) = splitAt i trees
+                                                           let newNode = Node (fst r) (reverse subforest)
+                                                           mkTreeWithStack rs (newNode : rest)
+mkTreeWithStack [] trees = case trees of [tree] -> tree
+                                         [] -> error "BUG: This should not happen (empty tree)"
+                                         _ -> error "BUG: This should not happen (too many trees)"
+
+mkTree :: [(Int,Rule)] -> ParseTree
+mkTree rs = mkTreeWithStack (reverse rs) []
 
 testG = mkGrammar "ST" [('S', "T"), ('S', "(S+T)"), ('T', "a")]
 
@@ -196,7 +153,11 @@ testT = case runExcept $ mkTable testG of Right t -> t
 
 main = do
   s <- getLine
-  let rules = runExceptT $ runReaderT (parse s) testT
-  print $ fromRight undefined $ rules
-  print ""
+  let rules = case (runReaderT (parse s) testT) :: Either ParseError [(Int, Rule)] of
+        Right r -> r
+        Left e -> error $ show e
+  print $ map fst rules
+  let tree = mkTree rules
+  putStr $ drawTree $ fmap show tree
+  --print ""
 
