@@ -20,9 +20,9 @@ import Grammar
 type Table = Map (NT, Maybe T) (Int, Rule)
 
 data TableError = NonDeterministic ((NT, Maybe T), [Int]) | InfiniteLoop (NT, Maybe T)
-  deriving Show
+  deriving (Eq, Show)
 data ParseError = UnexpectedCharacter | StringTooShort | StringTooLong | NoRule
-  deriving Show
+  deriving (Eq, Show)
 
 
 ------------------------mkTable---------------------------------------------------
