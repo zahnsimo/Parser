@@ -37,8 +37,9 @@ checkGrammar (Grammar n ts rules) = all (\ (Rule (i, ls)) -> i < n &&
                                     $ map snd rules
 
 -- counts the number of children a rule has in the parse tree
-countChildren :: Rule -> Int
-countChildren = length . getNTs . getRHS
+countChildren :: ParseStep -> Int
+countChildren (ParseRule i r) = length $ getNTs $ getRHS r
+countChildren (ParseChar c) = 1
 
 --- find BLs and WLs
 

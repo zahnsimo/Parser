@@ -32,7 +32,8 @@ executable Parser
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
-    build-depends:    base ^>=4.17.2.0
+    build-depends:    QuickCheck >= 2.14.3
+                    , base ^>=4.17.2.0
                     , containers >= 0.6.7
                     , mtl >= 2.2.2
     hs-source-dirs:   app

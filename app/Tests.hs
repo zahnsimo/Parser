@@ -7,6 +7,8 @@ import Control.Monad.Except
 
 import Data.Tree
 
+import Test.QuickCheck
+
 import Grammar
 import Main
 
@@ -18,6 +20,8 @@ convParseStep (ParseRule i r) = I i
 convParseStep (ParseChar c) = C c
 
 type ParseTreeSimple = Tree ParseStepSimple
+
+-----------------functions for testing--------------------------
 
 testTable :: Grammar -> Either TableError Table -> Bool
 testTable gr exp = runExcept (mkTable gr) == exp
@@ -39,11 +43,21 @@ testTree :: Grammar -> [(String, Either ParseError ParseTreeSimple)] -> Bool
 testTree gr testtrees
   = let t = unwrapTable $ mkTable gr
         compareTrees :: (String, Either ParseError ParseTreeSimple) -> Bool
-        compareTrees (s, exp) = case (runReaderT (mkTree <$> parse s) t, exp) of
+        compareTrees (s, exp) = case (runReaderT (mkParseTree <$> parse s) t, exp) of
                                   (Right tree, Right tree') -> fmap convParseStep tree == tree'
                                   (Left e, Left e') -> e == e'
                                   (_, _) -> False
     in and $ map compareTrees testtrees
+
+---test for trees with quickCheck
+
+children :: Tree a -> Tree (a, Int)
+children (Node x xs) = Node (x, length xs) (map children xs)
+
+test_Tree :: Eq a => Tree a -> Bool
+test_Tree t = mkTree (flatten ( children t)) == t
+
+----------------testcases----------------------------------
 
 g1 = mkGrammar "ST" [('S', "T"), ('S', "(S+T)"), ('T', "a")]
 t1 = fromList [ ((0,Just (TChar "(")) , (1,Rule (0,[TChar "(",NTChar 0,TChar "+",NTChar 1,TChar ")"])))
@@ -81,3 +95,4 @@ main = do
   print $ testTable g3 (Right t3)
   print $ testParse g3 testcases3
   print $ testTree g3 testtrees3
+  quickCheck (test_Tree :: Tree Int -> Bool) 

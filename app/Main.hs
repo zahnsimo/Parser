@@ -150,24 +150,22 @@ parseWithStack [] [] = return []
 parseWithStack [] _ = throwError StringTooLong
 
 
-
-mkTreeWithStack :: [ParseStep] -> [ParseTree] -> ParseTree
-mkTreeWithStack (r:rs) trees = case r of
-  ParseRule i rule -> let children = countChildren rule
-                       in case children of 0 -> let newNode = Node r []
-                                                 in mkTreeWithStack rs (newNode:trees)
-                                           j -> let (subforest, rest) = splitAt j trees
-                                                    newNode = Node r (reverse subforest)
-                                                 in mkTreeWithStack rs (newNode : rest)
-  ParseChar c -> case trees of (t:ts) -> let newNode = Node r [t]
-                                          in mkTreeWithStack rs (newNode : ts)
-                               [] -> error "BUG" --maybe extend countchildren
+mkTreeWithStack :: [(a,Int)] -> [Tree a] -> Tree a
+mkTreeWithStack ((x, i): xs) trees = let (subforest, rest) = splitAt i trees
+                                         newNode = Node x subforest
+                                     in mkTreeWithStack xs (newNode : rest)
 mkTreeWithStack [] trees = case trees of [tree] -> tree
                                          [] -> error "BUG: This should not happen (empty tree)"
                                          _ -> error "BUG: This should not happen (too many trees)"
 
-mkTree :: [ParseStep] -> ParseTree
+mkTree :: [(a,Int)] -> Tree a
 mkTree rs = mkTreeWithStack (reverse rs) []
+
+
+mkParseTree :: [ParseStep] -> ParseTree
+mkParseTree = mkTree . map (\ step -> (step, countChildren step) )
+
+
 
 testG = mkGrammar "ST" [('S', "T"), ('S', "(S+T)"), ('T', "a")]
 
@@ -181,12 +179,13 @@ t =  case runExcept $ mkTable g of Right ta -> ta
 
 main = do
   s <- getLine
-  let rules = case (runReaderT (parse s) t) :: Either ParseError [ParseStep] of
+  let rules = case (runReaderT (parse s) testT) :: Either ParseError [ParseStep] of
         Right r -> r
         Left e -> error $ show e
   print rules
-  let tree = mkTree rules
-  print tree
+  let tree = mkParseTree rules
+  --print tree
   putStr $ drawTree $ fmap show tree
+  print $ flatten tree
   --print ""
 
