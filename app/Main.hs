@@ -18,14 +18,28 @@ import Grammar
 
 --------------------types-----------------------
 
-
---type Table = Map (NT, Maybe T) (Int, Rule)
 type Table = Map (NT, Maybe RuleChar) (Int, Rule)
+data ParseInfo = ParseInfo {
+    table :: Table
+  , stringChars :: [RuleChar]
+  , maxPrefixLength :: Int
+  }
+--contains the table, a list of all RuleChars (excluding NTChars) and maximumPrefixLength
 
-data TableError = NonDeterministic ((NT, Maybe T), [Int]) | InfiniteLoop (NT, Maybe RuleChar) | Test 
+data TableError = NonDeterministic ((NT, Maybe RuleChar), [Int])
+                | InfiniteLoop (NT, Maybe RuleChar) --[NT]
+                | Test
   deriving (Eq, Show)
-data ParseError = UnexpectedCharacter | StringTooShort | StringTooLong | NoRule -- NT [RuleChar] String
-  | BlackList Char | WhiteList Char
+
+data ParseError =
+    UnexpectedCharacter Char Char -- returns the expected char vs the actual char
+  | MissingCharacters String -- returns the next chars that were expected
+  | MissingBLCharacters [Char]
+  | MissingWLCharacters [Char]
+  | StringTooLong String -- returns the rest of the string
+  | NoRule NT String -- expects to parse some rule, returns top NT from stack and rest of string
+  | BlackList [Char] Char
+  | WhiteList [Char] Char
   deriving (Eq, Show)
 
 
@@ -73,8 +87,15 @@ mkTable gr@(Grammar n ts rules)
   where helper (i,c) = do rls <- runReaderT (findRules (i,c)) gr
                           case rls of [] -> return Nothing
                                       [x] -> return $ Just ((i,c), x)
-                                      ls ->  throwError Test -- $ NonDeterministic ((i,c), map fst ls)
+                                      ls ->  throwError $ NonDeterministic ((i,c), map fst ls)
 
+mkParseInfo :: (Monad m, MonadError TableError m)
+  => Grammar -> m ParseInfo
+mkParseInfo gr@(Grammar n ts rules)
+  = do table <- mkTable gr
+       let stringChars = catMaybes $ map snd $ keys table
+       let maxPrefixLength = maximum $ (map length) $ getTs stringChars
+       return $ ParseInfo table stringChars maxPrefixLength
 
 -----------------------parse------------------------------------
 
@@ -83,71 +104,69 @@ isPrefix [] _ = True
 isPrefix _ [] = False
 isPrefix (c:s) (c':s') = c == c' && isPrefix s s'
 
-removePrefix :: String -> String -> Maybe String
-removePrefix [] s = Just s
-removePrefix (c:s) [] = Nothing
+removePrefix :: (Monad m, MonadError ParseError m) =>
+  String -> String -> m String
+removePrefix [] s = return s
+removePrefix (c:s) [] = throwError $ MissingCharacters (c:s)
 removePrefix (c:s) (c':s') = case c == c' of True -> removePrefix s s'
-                                             False -> Nothing
+                                             False -> throwError $ UnexpectedCharacter c c'
 
 
-
--------extend to BL/WL chars
-chooseRuleHelper :: (Monad m, MonadReader Table m, MonadError ParseError m) =>
-  NT -> [RuleChar] -> m (Maybe (Int, Rule))
-chooseRuleHelper i (t:ts) = do r <- asks $ lookup (i, Just t)
+chooseRuleHelper :: (Monad m, MonadReader ParseInfo m, MonadError ParseError m) =>
+  NT -> [Maybe RuleChar] -> m (Maybe (Int, Rule))
+chooseRuleHelper i (t:ts) = do r <- asks $ lookup (i, t) . table
                                case r of Just _ -> return r
                                          Nothing -> chooseRuleHelper i ts
-chooseRuleHelper i [] = do r <- asks $ lookup (i, Nothing)
-                           return r
+chooseRuleHelper i [] = return Nothing
+  -- do r <- asks $ lookup (i, Nothing)
+  --                          return r
 
 downFrom :: Int -> [Int]
 downFrom 0 = []
 downFrom n = [n, (n-1)..1]
 
-chooseRule :: (Monad m, MonadReader Table m, MonadError ParseError m) =>
-  NT -> String -> m (Maybe (Int, Rule))
-chooseRule i "" = do r <- asks $ lookup (i, Nothing)
-                     return r
-chooseRule i s = do ruleChars <- asks $ catMaybes . (map snd) . keys
-                    let maxLengthPrefix = maximum $ (map length) $ getTs ruleChars
-                    let prefixes = map TChar $ map (\ l -> take l s) $ downFrom maxLengthPrefix
+chooseRule :: (Monad m, MonadReader ParseInfo m, MonadError ParseError m) =>
+  NT -> String -> m (Int, Rule)
+chooseRule i "" = do rule <- asks $ lookup (i, Nothing) . table
+                     case rule of
+                       Just r -> return r
+                       Nothing -> throwError $ NoRule i ""
+chooseRule i s = do strChars <- asks stringChars
+                    maxPrefixLength <- asks maxPrefixLength
+                    let prefixes = map TChar $ map (\ l -> take l s) $ downFrom maxPrefixLength
                     let h = head s
-                    let wls = map WL $ filter (h `elem`) $ getWLs ruleChars
-                    let bls = map BL $ filter (not . (h `elem`)) $ getBLs ruleChars
-                    chooseRuleHelper i (prefixes ++ wls ++ bls)
+                    let wls = map WL $ filter (h `elem`) $ getWLs strChars
+                    let bls = map BL $ filter (not . (h `elem`)) $ getBLs strChars
+                    rule <- chooseRuleHelper i (map Just (prefixes ++ wls ++ bls) ++ [Nothing])
+                    case rule of
+                      Just r -> return r
+                      Nothing -> throwError $ NoRule i s
                                        
                        
-parse :: (Monad m, MonadReader Table m, MonadError ParseError m) =>
+parse :: (Monad m, MonadReader ParseInfo m, MonadError ParseError m) =>
   String -> m [ParseStep]
 parse = parseWithStack [NTChar 0]
 
-parseWithStack :: (Monad m, MonadReader Table m, MonadError ParseError m) =>
+-- parseWithState :: (Monad m, MonadReader Table m, MonadError ParseError m) =>
+--   ([RuleChar], String, [ParseStep]) -> m ([RuleChar], String, [ParseStep])
+-- parseWithState ((TChar c : xs) , s , steps) = (\ s' -> parseWithState (xs, s', steps)) =<< removePrefix c s
+
+
+parseWithStack :: (Monad m, MonadReader ParseInfo m, MonadError ParseError m) =>
   [RuleChar] -> String -> m [ParseStep]
-parseWithStack (TChar c : xs) s = case removePrefix c s of
-  Just s' -> parseWithStack xs s'
-  Nothing -> throwError UnexpectedCharacter
-parseWithStack (NTChar i :xs) "" = do
-  r <- chooseRule i ""
-  case r of Just (k, r@(Rule (j, ls))) -> do rest <- parseWithStack (ls ++ xs) []
-                                             return ((ParseRule k r):rest)
-            Nothing -> throwError StringTooShort
-parseWithStack (NTChar i : xs) s = do
-  r <- chooseRule i s
-  case r of Just (k, r@(Rule (j, ls))) -> do rest <- parseWithStack (ls ++ xs) s
-                                             return ((ParseRule k r):rest)
-            Nothing -> throwError $ NoRule -- i xs s
+parseWithStack (TChar c : xs) s = parseWithStack xs =<< removePrefix c s
+parseWithStack (NTChar i : xs) s = do (k, r@(Rule (j, ls))) <- chooseRule i s
+                                      ((ParseRule k r) :) <$> parseWithStack (ls ++ xs) s
 parseWithStack (BL cs :xs) (c:s) = do case c `elem` cs of
-                                        False -> do rest <- parseWithStack xs s
-                                                    return ((ParseChar c):rest)
-                                        True -> throwError $ BlackList c
-parseWithStack (BL cs :xs) "" = throwError StringTooShort
+                                        False -> ((ParseChar c) :) <$> parseWithStack xs s
+                                        True  -> throwError $ BlackList cs c
+parseWithStack (BL cs :xs) "" = throwError $ MissingBLCharacters cs
 parseWithStack (WL cs :xs) (c:s) = do case c `elem` cs of
-                                        True -> do rest <- parseWithStack xs s
-                                                   return ((ParseChar c):rest)
-                                        False -> throwError $ WhiteList c
-parseWithStack (WL cs :xs) "" = throwError StringTooShort
+                                        True  -> ((ParseChar c) :) <$> parseWithStack xs s
+                                        False -> throwError $ WhiteList cs c
+parseWithStack (WL cs :xs) "" = throwError $ MissingWLCharacters cs
 parseWithStack [] [] = return []
-parseWithStack [] _ = throwError StringTooLong
+parseWithStack [] s = throwError $ StringTooLong s
 
 
 mkTreeWithStack :: [(a,Int)] -> [Tree a] -> Tree a
@@ -172,14 +191,20 @@ testG = mkGrammar "ST" [('S', "T"), ('S', "(S+T)"), ('T', "a")]
 testT = case runExcept $ mkTable testG of Right t -> t
                                           Left e -> error $ show e
 
+testI = case runExcept $ mkParseInfo testG of Right t -> t
+                                              Left e -> error $ show e
+
 g = Grammar 2 ["\"" , "a"] [ ( 0 , Rule ( 0, [TChar "\"" , NTChar 1, TChar "\""]) ) , (1, Rule ( 1, [BL ['\"'], NTChar 1]))  , (2, Rule ( 1, [])) ]
 
 t =  case runExcept $ mkTable g of Right ta -> ta
                                    Left e -> error $ show e
 
+i = case runExcept $ mkParseInfo testG of Right t -> t
+                                          Left e -> error $ show e
+
 main = do
   s <- getLine
-  let rules = case (runReaderT (parse s) testT) :: Either ParseError [ParseStep] of
+  let rules = case (runReaderT (parse s) testI) :: Either ParseError [ParseStep] of
         Right r -> r
         Left e -> error $ show e
   print rules

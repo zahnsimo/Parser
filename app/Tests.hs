@@ -12,11 +12,11 @@ import Test.QuickCheck
 import Grammar
 import Main
 
-data ParseStepSimple = I Int | C Char
-  deriving Eq
+data ParseStepSimple = R Int | C Char
+  deriving (Eq, Show)
 
 convParseStep :: ParseStep -> ParseStepSimple
-convParseStep (ParseRule i r) = I i
+convParseStep (ParseRule i r) = R i
 convParseStep (ParseChar c) = C c
 
 type ParseTreeSimple = Tree ParseStepSimple
@@ -26,28 +26,45 @@ type ParseTreeSimple = Tree ParseStepSimple
 testTable :: Grammar -> Either TableError Table -> Bool
 testTable gr exp = runExcept (mkTable gr) == exp
 
-unwrapTable table = case runExcept table of Right t -> t
-                                            Left e -> error $ show e
+unwrapExcept :: Show a1 => Except a1 a2 -> a2
+unwrapExcept ex = case runExcept ex of Right a -> a
+                                       Left e -> error $ show e
 
-testParse :: Grammar -> [(String, Either ParseError [ParseStepSimple])] -> Bool
+----tests if a function returns the right values for a list of testcases
+----if test is successfull, returns Right (), otherwise returns list of incorrect cases
+----(as a triple of input, function output, expected value from the testcases)
+
+testFunction :: (Eq b) => (a -> b) -> [(a,b)] -> Either [(a,b,b)] ()
+testFunction f ys = Prelude.foldr helper (Right ()) ys
+  where helper (x,y) ex = let y' = f x
+                          in case (y == y', ex) of
+                               (True, _) -> ex
+                               (False, Right ()) -> Left [(x,y',y)]
+                               (False, Left exs) -> Left ((x,y',y):exs)
+
+parseForTesting :: ParseInfo -> String -> Either ParseError [ParseStepSimple]
+parseForTesting inf s = case runReaderT (parse s) inf of
+                          Left e -> Left e
+                          Right steps -> Right $ map convParseStep steps
+
+testParse :: Grammar -> [(String, Either ParseError [ParseStepSimple])] ->
+  Either [(String, Either ParseError [ParseStepSimple], Either ParseError [ParseStepSimple])] ()
 testParse gr testcases
-  = let t = unwrapTable $ mkTable gr
-        compareRes :: (String, Either ParseError [ParseStepSimple]) -> Bool
-        compareRes (s, exp) = case (runReaderT (parse s) t, exp) of
-                                (Right rules, Right rules') -> map convParseStep rules == rules'
-                                (Left e, Left e') -> e == e'
-                                (_, _) -> False
-     in and $ map compareRes testcases
+  = let inf = unwrapExcept $ mkParseInfo gr
+     in testFunction (parseForTesting inf) testcases
 
-testTree :: Grammar -> [(String, Either ParseError ParseTreeSimple)] -> Bool
+---maybe unimportant, better test for mkTree below
+
+mkParseTreeForTesting :: ParseInfo -> String -> Either ParseError ParseTreeSimple
+mkParseTreeForTesting inf s = case runReaderT (parse s) inf of
+                                Left e -> Left e
+                                Right steps -> Right $ fmap convParseStep $ mkParseTree steps
+
+testTree :: Grammar -> [(String, Either ParseError ParseTreeSimple)] ->
+  Either [(String, Either ParseError ParseTreeSimple, Either ParseError ParseTreeSimple)] ()
 testTree gr testtrees
-  = let t = unwrapTable $ mkTable gr
-        compareTrees :: (String, Either ParseError ParseTreeSimple) -> Bool
-        compareTrees (s, exp) = case (runReaderT (mkParseTree <$> parse s) t, exp) of
-                                  (Right tree, Right tree') -> fmap convParseStep tree == tree'
-                                  (Left e, Left e') -> e == e'
-                                  (_, _) -> False
-    in and $ map compareTrees testtrees
+  = let inf = unwrapExcept $ mkParseInfo gr
+     in testFunction (mkParseTreeForTesting inf) testtrees
 
 ---test for trees with quickCheck
 
@@ -63,27 +80,27 @@ g1 = mkGrammar "ST" [('S', "T"), ('S', "(S+T)"), ('T', "a")]
 t1 = fromList [ ((0,Just (TChar "(")) , (1,Rule (0,[TChar "(",NTChar 0,TChar "+",NTChar 1,TChar ")"])))
               , ((0,Just (TChar "a")) , (0,Rule (0,[NTChar 1])))
               , ((1,Just (TChar "a")) , (2,Rule (1,[TChar "a"])))]
-testcases1 = [ ("a", Right [I 0,I 2])
-             , ("(a+a)", Right [I 1,I 0,I 2,I 2])
-             , ("a+a", Left StringTooLong)
-             , ("(a+", Left StringTooShort)]
+testcases1 = [ ("a", Right [R 0,R 2])
+             , ("(a+a)", Right [R 1,R 0,R 2,R 2])
+             , ("a+a", Left $ StringTooLong "+a")
+             , ("(a+", Left $ NoRule 1 "")]
 
 g2 = mkGrammarFromRules [('S', "aa"), ('S', "ab")]
 t2 = fromList [ ((0,Just $ TChar "aa") , (0,Rule (0,[TChar "aa"])))
               , ((0,Just $ TChar "ab") , (1,Rule (0,[TChar "ab"])))]
-testcases2 = [("aa", Right [I 0]), ("ab", Right [I 1])]
+testcases2 = [("aa", Right [R 0]), ("ab", Right [R 1])]
 
 g3 = Grammar 2 ["\"" , "a"] [ ( 0 , Rule ( 0, [TChar "\"" , NTChar 1, TChar "\""]) ) , (1, Rule ( 1, [BL ['\"'], NTChar 1]))  , (2, Rule ( 1, [])) ]
 t3 = fromList [ ((0,Just (TChar "\"")) , (0,Rule (0,[TChar "\"",NTChar 1,TChar "\""])))
               , ((1,Nothing) , (2,Rule (1,[])))
               , ((1,Just (BL "\"")) , (1,Rule (1,[BL "\"",NTChar 1])))]
-testcases3 = [ ("\"\"", Right [I 0,I 2])
-             , ("\"abc\"", Right [I 0,I 1,C 'a',I 1,C 'b',I 1,C 'c',I 2])
-             , ("\"", Left UnexpectedCharacter)
-             , ("a", Left NoRule) -- 0 [] "a" 
-             , ("\"a", Left UnexpectedCharacter)]
-testtrees3 = [ ("\"\"", Right Node {rootLabel = I 0, subForest = [Node {rootLabel = I 2, subForest = []}]})
-             , ("\"abc\"", Right Node {rootLabel = I 0, subForest = [Node {rootLabel = I 1, subForest = [Node {rootLabel = C 'a', subForest = [Node {rootLabel = I 1, subForest = [Node {rootLabel = C 'b', subForest = [Node {rootLabel = I 1, subForest = [Node {rootLabel = C 'c', subForest = [Node {rootLabel = I 2, subForest = []}]}]}]}]}]}]}]} )
+testcases3 = [ ("\"\"", Right [R 0,R 2])
+             , ("\"abc\"", Right [R 0,R 1,C 'a',R 1,C 'b',R 1,C 'c',R 2])
+             , ("\"", Left $ MissingCharacters "\"")
+             , ("a", Left $ NoRule 0 "a") -- 0 [] "a" 
+             , ("\"a", Left $ MissingCharacters "\"")]
+testtrees3 = [ ("\"\"", Right Node {rootLabel = R 0, subForest = [Node {rootLabel = R 2, subForest = []}]})
+             , ("\"abc\"", Right Node {rootLabel = R 0, subForest = [Node {rootLabel = R 1, subForest = [Node {rootLabel = C 'a', subForest = [Node {rootLabel = R 1, subForest = [Node {rootLabel = C 'b', subForest = [Node {rootLabel = R 1, subForest = [Node {rootLabel = C 'c', subForest = [Node {rootLabel = R 2, subForest = []}]}]}]}]}]}]}]} )
              ]
 
 
