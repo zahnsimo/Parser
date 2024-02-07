@@ -10,7 +10,7 @@ import Data.Tree
 import Test.QuickCheck
 
 import Grammar
-import Main
+import LRparser
 
 data ParseStepSimple = R Int | C Char
   deriving (Eq, Show)
@@ -68,11 +68,11 @@ testTree gr testtrees
 
 ---test for trees with quickCheck
 
-children :: Tree a -> Tree (a, Int)
-children (Node x xs) = Node (x, length xs) (map children xs)
+treeWithChildren :: Tree a -> Tree (a, Int)
+treeWithChildren (Node x xs) = Node (x, length xs) (map treeWithChildren xs)
 
-test_Tree :: Eq a => Tree a -> Bool
-test_Tree t = mkTree (flatten ( children t)) == t
+testTreeQC :: Eq a => Tree a -> Bool
+testTreeQC t = mkTree (flatten ( treeWithChildren t)) == t
 
 ----------------testcases----------------------------------
 
@@ -98,7 +98,8 @@ testcases3 = [ ("\"\"", Right [R 0,R 2])
              , ("\"abc\"", Right [R 0,R 1,C 'a',R 1,C 'b',R 1,C 'c',R 2])
              , ("\"", Left $ MissingCharacters "\"")
              , ("a", Left $ NoRule 0 "a") -- 0 [] "a" 
-             , ("\"a", Left $ MissingCharacters "\"")]
+             , ("\"a", Left $ MissingCharacters "\"")
+             , ("\"a\"a", Left $ StringTooLong "a")]
 testtrees3 = [ ("\"\"", Right Node {rootLabel = R 0, subForest = [Node {rootLabel = R 2, subForest = []}]})
              , ("\"abc\"", Right Node {rootLabel = R 0, subForest = [Node {rootLabel = R 1, subForest = [Node {rootLabel = C 'a', subForest = [Node {rootLabel = R 1, subForest = [Node {rootLabel = C 'b', subForest = [Node {rootLabel = R 1, subForest = [Node {rootLabel = C 'c', subForest = [Node {rootLabel = R 2, subForest = []}]}]}]}]}]}]}]} )
              ]
@@ -112,4 +113,4 @@ main = do
   print $ testTable g3 (Right t3)
   print $ testParse g3 testcases3
   print $ testTree g3 testtrees3
-  quickCheck (test_Tree :: Tree Int -> Bool) 
+  quickCheck (testTreeQC :: Tree Int -> Bool) 
