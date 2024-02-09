@@ -4,7 +4,7 @@ import Data.Tree
 import Control.Monad.Reader
 
 import Grammar
-import LRparser
+import LL1Parser
 import Tests
 
 ----grammars

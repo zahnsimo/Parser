@@ -10,7 +10,7 @@ import Data.Tree
 import Test.QuickCheck
 
 import Grammar
-import LRparser
+import LL1Parser
 
 data ParseStepSimple = R Int | C Char
   deriving (Eq, Show)
