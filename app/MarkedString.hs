@@ -1,15 +1,17 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiWayIf #-}
 
+module MarkedString (stringToGrammar) where
+
 import Control.Monad.State.Strict
 import Data.List
 import Data.List.Split
 
-import System.IO.Unsafe
+--import System.IO.Unsafe
 
 import Grammar
 
-data Marker = NTBracket -- Bool ; for hidden NTs
+data Marker = NTBracket   -- Bool ; for hidden NTs
             | RuleDivider -- seperates different rules 
             | Arrow -- seperates LHS and RHS of rules
             | WildCardBracket Bool -- for BLs ad WLs
@@ -26,8 +28,8 @@ markerRepresentation WildCardSeperator = '&'
 
 data MarkedChar = C Char | M Marker
   deriving (Eq, Show)
-data MarkedString = MS [MarkedChar]
-  deriving Show
+
+type MarkedString = [MarkedChar]
 
 isChar :: MarkedChar -> Bool
 isChar (C c) = True
@@ -42,7 +44,7 @@ markedCharToChar mc = case mc of
   C c -> c
 
 markedStringToString :: MarkedString -> String
-markedStringToString (MS cs) = map markedCharToChar cs
+markedStringToString cs = map markedCharToChar cs
 
 charToMarkedChar :: Char -> MarkedChar
 charToMarkedChar c = case c of
@@ -55,45 +57,39 @@ charToMarkedChar c = case c of
   _   -> C c
 
 stringToMarkedString :: String -> MarkedString
-stringToMarkedString = MS . (map charToMarkedChar)
+stringToMarkedString = map charToMarkedChar
 
 markedStringToRule :: (Monad m, MonadState [String] m)
  => MarkedString -> m Rule
-markedStringToRule (MS ms) =
-  do (lhs, rest) <- parseNT $ tail ms
+markedStringToRule (M NTBracket : ms) =
+  do (lhs, rest) <- (parseNT "") ms
      let rhs = parseArrow rest
-     -- unsafePerformIO (do print lhs
-     --                     print rhs
-     --                     return undefined)
      rulechars <- parse rhs
      return $ Rule (lhs, rulechars)
-       where parseNT cs
-               = do let (ntchars, rest) = break (== M NTBracket) cs
-                    if | rest == [] -> error "expected snd NTbracket" 
-                       | all isChar ntchars -> do let ntname = map (\ (C c) -> c) ntchars
-                                                  names <- get
-                                                  case elemIndex ntname names of
-                                                    Just i -> return (i, tail rest)
-                                                    Nothing -> modify (\ ls -> ls ++  [ntname]) >> return (length names, tail rest)
-                       | otherwise -> error "only non special chars between NTbrackets"
-
+       where parse :: (Monad m, MonadState [String] m)
+               => MarkedString -> m [RuleChar]
+             parse [] = return []
+             parse (c:cs) = case c of
+               M NTBracket -> do (j, rest) <- parseNT "" cs
+                                 (NTChar j :) <$> parse rest
+               M RuleDivider -> error "unexpected RuleDivider"
+               M Arrow -> error "unexpected arrow"
+               M (WildCardBracket b) -> do let (list, rest) = parseWC [] cs b
+                                           case b of True  -> (BL list :) <$> parse rest
+                                                     False -> (WL list :) <$> parse rest
+               C char -> do let (t, rest) = parseT [char] cs
+                            (TChar t :) <$> parse rest                            
+             parseNT _ [] = error "no closing NT bracket"               
+             parseNT label (c:cs)
+               = case c of C x -> parseNT (label ++ [x]) cs
+                           M NTBracket -> do names <- get
+                                             case elemIndex label names of
+                                               Just i -> return (i, cs)
+                                               Nothing -> modify (\ ls -> ls ++  [label]) >> return (length names, cs)
+                           _ -> error "unexpected symbol in NT label"
              parseArrow (c:cs)
                = case c of M Arrow -> cs
                            _ -> error "expected arrow"
-             parse [] = return []
-             parse (c:cs) = case c of
-               M NTBracket -> do (j, rest) <- parseNT cs
-                                 prest <- parse rest
-                                 return (NTChar j : prest)
-               M RuleDivider -> error "no RuleDivider within rules"
-               M Arrow -> error "too many arrows"
-               M (WildCardBracket b) -> do let (list, rest) = parseWC [] cs b
-                                           prest <- parse rest
-                                           case b of True -> return (BL list : prest)
-                                                     False -> return (WL list : prest)
-               C char -> do let (t, rest) = parseT [char] cs
-                            prest <- parse rest
-                            return (TChar t : prest)
              parseWC list (c:c':cs) b = case (c, c') of
                (C x, M WildCardSeperator) -> parseWC (x : list) cs b
                (C x , M (WildCardBracket b)) -> ((x:list), cs)
@@ -103,16 +99,18 @@ markedStringToRule (MS ms) =
                C char -> parseT (str ++ [char]) cs
                _ -> (str, (c:cs))
              parseT str [] = (str, [])
-  --let (lhs, rhs) = (\ (a,b) -> (a, parseArrow b) ) $ parseNT ms
-  
+markedStringToRule _ = error "expected NTBracket at start of rule"
 
 markedStringToGrammar :: MarkedString -> Grammar
-markedStringToGrammar (MS ms) = let split = map MS $ splitOn [M RuleDivider] ms
-                                    (rules, labels) = runState (traverse markedStringToRule split) []
-                                    rulesWithInd = zip [1..] rules
-                                    n = length labels
-                                    ts = rmdups $ concatMap (getTs . getRHS . snd) $ rulesWithInd
-                                 in (Grammar n ts rulesWithInd)
+markedStringToGrammar ms = let split = splitOn [M RuleDivider] ms
+                               (rules, labels) = runState (traverse markedStringToRule split) []
+                               rulesWithInd = zip [0..] rules
+                               n = length labels
+                               ts = rmdups $ concatMap (getTs . getRHS) $ rules
+                           in (Grammar n ts rulesWithInd)
+
+stringToGrammar :: String -> Grammar
+stringToGrammar = markedStringToGrammar . stringToMarkedString
                                     
 ms = stringToMarkedString "_abc_~!g!"
 ms2 = stringToMarkedString "_abc_~def_i_e"
