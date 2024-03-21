@@ -14,7 +14,8 @@ import Grammar
 data Marker = NTBracket Bool  -- for hidden NTs
             | RuleDivider -- seperates different rules 
             | Arrow -- seperates LHS and RHS of rules
-            | WildCardBracket Bool -- for BLs ad WLs
+            | WildCardBracket Bool -- true for WhiteList (c in list)
+                                   -- false for BlackList (c notin list)
             | WildCardSeperator
   deriving (Eq, Show)
 
@@ -75,8 +76,7 @@ markedStringToRule (M (NTBracket b) : mcs) =
                M RuleDivider -> error "unexpected RuleDivider"
                M Arrow -> error "unexpected arrow"
                M (WildCardBracket b) -> do let (list, rest) = parseWC [] mcs b
-                                           case b of True  -> (BL list :) <$> parse rest
-                                                     False -> (WL list :) <$> parse rest
+                                           (WildCard list b :) <$> parse rest
                C c -> do let (t, rest) = parseT [c] mcs
                          (TChar t :) <$> parse rest
              parseNT _ [] b = error "no closing NT bracket"               

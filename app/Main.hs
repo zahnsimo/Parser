@@ -21,12 +21,7 @@ import MarkedString
 
 
 testG = mkGrammar "ST" [('S', "T"), ('S', "(S+T)"), ('T', "a")]
-
 testI = unwrapExcept $ mkParseInfo testG
-
-g = Grammar 2 ["\""] [ ( 0 , Rule ( 0, [TChar "\"" , NTChar 1 True, TChar "\""]) ) , (1, Rule ( 1, [BL ['\"'], NTChar 1 True]))  , (2, Rule ( 1, [])) ]
-
-i = unwrapExcept $ mkParseInfo g
 
 gblub = stringToGrammar "_S_~_T_$_S_~(^A^_S_^A^+^A^_T_^A^)$_T_~a$^A^~$^A^~ "
 iblub = unwrapExcept $ mkParseInfo gblub
@@ -47,9 +42,12 @@ iblub = unwrapExcept $ mkParseInfo gblub
 gbli = stringToGrammar "_S_~^T^a$^T^~ $^T^~"
 ibli = unwrapExcept $ mkParseInfo gbli
 
+g3 = stringToGrammar "_S_~\"_T_\"$_T_~@\"@_T_$_T_~"
+i3 = unwrapExcept $ mkParseInfo g3
+
 main = do
   s <- getLine
-  let rules = unwrapExcept $ (runReaderT (parse s) iblub)
+  let rules = unwrapExcept $ (runReaderT (parse s) i3)
   print rules
   let tree = mkParseTree rules
   --print tree

@@ -9,8 +9,8 @@ type T = String
 
 data RuleChar = NTChar NT Bool -- true: NT appears in parse tree; false: NT hidden
               | TChar T
-              | BL [Char]
-              | WL [Char]
+              | WildCard [Char] Bool -- true for WhiteList (c in list)
+                                     -- false for BlackList (c notin list)
   deriving (Show, Eq, Ord)
 
 newtype Rule = Rule (NT, [RuleChar])
@@ -41,52 +41,47 @@ checkGrammar (Grammar n ts rules) = all (\ (Rule (i, ls)) -> i < n &&
 
 -- counts the number of children a rule has in the parse tree
 countChildren :: ParseStep -> Int
-countChildren (ParseRule i r) = length $ filter (\ rc -> case rc of
-                                                           NTChar i True -> True
-                                                           _ -> False) $ getRHS r
+countChildren (ParseRule i r) = length $ filter isNTVisible $ getRHS r
 countChildren (ParseChar c) = 1
 
 --- find BLs and WLs
 
+isNTVisible :: RuleChar -> Bool
+isNTVisible (NTChar _ True) = True
+isNTVisible _ = False
+
+isNTHidden :: RuleChar -> Bool
+isNTHidden (NTChar _ False) = True
+isNTHidden _ = False
+
+isNT :: RuleChar -> Bool
+isNT (NTChar _ _) = True
+isNT _ = False
+
+isT :: RuleChar -> Bool
+isT (TChar _) = True
+isT _ = False
+
+isWC :: Bool -> RuleChar -> Bool
+isWC b' (WildCard _ b) = b==b'
+isWC _ _ = False
+
 getRHS :: Rule -> [RuleChar]
 getRHS (Rule (i, cs)) = cs
 
-getTs :: [RuleChar] -> [T]
-getTs = rmdups. foldr (\ rc xs -> case rc of
-                                    TChar cs -> cs : xs
-                                    _ -> xs) []
-
-
-getNTTrues :: [RuleChar] -> [NT]
-getNTTrues = rmdups . foldr (\ rc xs -> case rc of
-                                          NTChar cs True -> cs : xs
-                                          _ -> xs) []
-
 getNTs :: [RuleChar] -> [NT]
-getNTs = rmdups . foldr (\ rc xs -> case rc of
-                                      NTChar cs _ -> cs : xs
-                                      _ -> xs) []
+getNTs = rmdups . map (\ (NTChar i _) -> i) . filter isNT
 
-getBLs :: [RuleChar] -> [[Char]]
-getBLs = rmdups . foldr (\ rc xs -> case rc of
-                                      BL cs -> cs : xs
-                                      _ -> xs) []
+getNTVisibles :: [RuleChar] -> [NT]
+getNTVisibles = rmdups . map (\ (NTChar i _) -> i) . filter isNTVisible
 
-getWLs :: [RuleChar] -> [[Char]]
-getWLs = rmdups . foldr (\ rc xs -> case rc of
-                                      WL cs -> cs : xs
-                                      _ -> xs) []
-
-bls :: Grammar -> [[Char]]
-bls gr = rmdups . concatMap (getBLs . getRHS . snd) $ rules gr
-
-wls :: Grammar -> [[Char]]
-wls gr = rmdups . concatMap (getWLs . getRHS . snd) $ rules gr
+getTs :: [RuleChar] -> [T]
+getTs = rmdups. map (\ (TChar s) -> s) . filter isT
 
 ---convert strings to rules
 
 rmdups :: (Eq a, Ord a) => [a] -> [a]
-rmdups xs = map head $ groupBy (\ x y -> x == y) $ sort xs
+rmdups xs = map head $ group $ sort xs
 
 convertToRuleChars :: [Char] -> String -> [RuleChar]
 convertToRuleChars ntStr rStr = let (a,b) = break (\ c -> c `elem` ntStr) rStr

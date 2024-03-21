@@ -104,10 +104,10 @@ t2 = fromList [ ((0,Just $ TChar "aa") , (0,Rule (0,[TChar "aa"])))
 testcases2 = [("aa", Right [R 0]), ("ab", Right [R 1])]
 
 --g3 = Grammar 2 ["\""] [ ( 0 , Rule ( 0, [TChar "\"" , NTChar 1 True, TChar "\""]) ) , (1, Rule ( 1, [BL ['\"'], NTChar 1 True]))  , (2, Rule ( 1, [])) ]
-g3 = stringToGrammar "_S_~\"_T_\"$_T_~!\"!_T_$_T_~"
+g3 = stringToGrammar "_S_~\"_T_\"$_T_~@\"@_T_$_T_~"
 t3 = fromList [ ((0,Just (TChar "\"")) , (0,Rule (0,[TChar "\"",NTChar 1 True,TChar "\""])))
               , ((1,Nothing) , (2,Rule (1,[])))
-              , ((1,Just (BL "\"")) , (1,Rule (1,[BL "\"",NTChar 1 True])))]
+              , ((1,Just (WildCard "\"" False)) , (1,Rule (1,[WildCard "\"" False,NTChar 1 True])))]
 testcases3 = [ ("\"\"", Right [R 0,R 2])
              , ("\"abc\"", Right [R 0,R 1,C 'a',R 1,C 'b',R 1,C 'c',R 2])
              , ("\"", Left $ MissingCharacters "\"")
