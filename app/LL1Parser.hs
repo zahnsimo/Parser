@@ -24,6 +24,7 @@ data ParseInfo = ParseInfo {
   , stringChars :: [RuleChar]
   , maxPrefixLength :: Int
   }
+  deriving Show
 --contains the table, a list of all RuleChars (excluding NTChars) and maximumPrefixLength
 
 data TableError = NonDeterministic ((NT, Maybe RuleChar), [Int])
@@ -37,7 +38,8 @@ data ParseError =
   | MissingBLCharacter [Char]
   | MissingWLCharacter [Char]
   | StringTooLong String -- returns the rest of the string
-  | NoRule NT String -- expects to parse some rule, returns top NT from stack and rest of string
+  | NoRule NT String -- [Maybe RuleChar]
+  -- expects to parse some rule, returns top NT from stack and rest of string
   | BlackList [Char] Char
   | WhiteList [Char] Char
   deriving (Eq, Show)
@@ -54,8 +56,9 @@ findRulesWithLevel l (i, Just c)
                helper (_ , Rule (j,s))
                  = do case (i == j, head s == c, head s) of
                         (True, True, _) -> return True
-                        (True, False, NTChar k) ->do next_level <- findRulesWithLevel (l-1) (k, Just c)
-                                                     return (next_level /= [])
+                        (True, False, NTChar k _) ->do next_level <- findRulesWithLevel (l-1) (k, Just c)
+                                                       eps_rules <- findRulesWithLevel (l-1) (k,Nothing)
+                                                       return (next_level ++ eps_rules /= [])
                         (True, _, _) -> return False
                         (False, _,_ )  -> return False
 
@@ -66,8 +69,8 @@ findRulesWithLevel l (i, Nothing)
            helper (_, Rule (j, s)) = if i == j then helper2 s else return False
            helper2 s = case s of
              [] -> return True
-             ((NTChar k):xs) -> do next_level <- findRulesWithLevel (l-1) (k, Nothing)
-                                   if next_level /= [] then helper2 xs else return False
+             ((NTChar k _):xs) -> do next_level <- findRulesWithLevel (l-1) (k, Nothing)
+                                     if next_level /= [] then helper2 xs else return False
              _ -> return False
 
 
@@ -92,7 +95,7 @@ mkParseInfo :: (Monad m, MonadError TableError m)
   => Grammar -> m ParseInfo
 mkParseInfo gr@(Grammar n ts rules)
   = do table <- mkTable gr
-       let stringChars = catMaybes $ map snd $ keys table
+       let stringChars = rmdups $ catMaybes $ map snd $ keys table
        let maxPrefixLength = maximum $ (map length) $ getTs stringChars
        return $ ParseInfo table stringChars maxPrefixLength
 
@@ -143,28 +146,34 @@ chooseRule i s = do strChars <- asks stringChars
                        
 parse :: (Monad m, MonadReader ParseInfo m, MonadError ParseError m) =>
   String -> m [ParseStep]
-parse = parseWithStack [NTChar 0]
+parse s = do (steps, rest) <- parseWithStack [NTChar 0 True] s
+             case rest of "" -> return steps
+                          _ -> throwError $ StringTooLong rest
 
 -- parseWithState :: (Monad m, MonadReader Table m, MonadError ParseError m) =>
 --   ([RuleChar], String, [ParseStep]) -> m ([RuleChar], String, [ParseStep])
 -- parseWithState ((TChar c : xs) , s , steps) = (\ s' -> parseWithState (xs, s', steps)) =<< removePrefix c s
 
+changefst :: (a -> a) -> (a,b) -> (a,b)
+changefst f (x,y) = (f x, y)
 
 parseWithStack :: (Monad m, MonadReader ParseInfo m, MonadError ParseError m) =>
-  [RuleChar] -> String -> m [ParseStep]
+  [RuleChar] -> String -> m ([ParseStep], String)
 parseWithStack (TChar c : xs) s = parseWithStack xs =<< removePrefix c s
-parseWithStack (NTChar i : xs) s = do (k, r@(Rule (j, ls))) <- chooseRule i s
-                                      ((ParseRule k r) :) <$> parseWithStack (ls ++ xs) s
+parseWithStack (NTChar i True : xs) s = do (k, r@(Rule (j, ls))) <- chooseRule i s
+                                           changefst ((ParseRule k r) :) <$> parseWithStack (ls ++ xs) s
+parseWithStack (NTChar i False : xs) s = do (substeps, s') <- parseWithStack [NTChar i True] s
+                                            parseWithStack xs s'
 parseWithStack (BL cs :xs) (c:s) = do case c `elem` cs of
-                                        False -> ((ParseChar c) :) <$> parseWithStack xs s
+                                        False -> changefst ((ParseChar c) :) <$> parseWithStack xs s
                                         True  -> throwError $ BlackList cs c
 parseWithStack (BL cs :xs) "" = throwError $ MissingBLCharacter cs
 parseWithStack (WL cs :xs) (c:s) = do case c `elem` cs of
-                                        True  -> ((ParseChar c) :) <$> parseWithStack xs s
+                                        True  -> changefst ((ParseChar c) :) <$> parseWithStack xs s
                                         False -> throwError $ WhiteList cs c
 parseWithStack (WL cs :xs) "" = throwError $ MissingWLCharacter cs
-parseWithStack [] [] = return []
-parseWithStack [] s = throwError $ StringTooLong s
+--parseWithStack [] [] = return []
+parseWithStack [] s = return ([], s) -- throwError $ StringTooLong s
 
 --splitAt, but returns error if i > length list
 splitAtExcact :: Int -> [a] -> ([a], [a])

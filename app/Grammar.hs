@@ -7,7 +7,10 @@ import Data.Tree
 type NT = Int
 type T = String
 
-data RuleChar = NTChar NT  | TChar T | BL [Char] | WL [Char]
+data RuleChar = NTChar NT Bool -- true: NT appears in parse tree; false: NT hidden
+              | TChar T
+              | BL [Char]
+              | WL [Char]
   deriving (Show, Eq, Ord)
 
 newtype Rule = Rule (NT, [RuleChar])
@@ -32,13 +35,15 @@ type ParseTree = Tree ParseStep
 
 checkGrammar :: Grammar -> Bool
 checkGrammar (Grammar n ts rules) = all (\ (Rule (i, ls)) -> i < n &&
-                                            all (\ s -> case s of NTChar j -> j < n
+                                            all (\ s -> case s of NTChar j _ -> j < n
                                                                   TChar s  -> s `elem` ts) ls)
                                     $ map snd rules
 
 -- counts the number of children a rule has in the parse tree
 countChildren :: ParseStep -> Int
-countChildren (ParseRule i r) = length $ getNTs $ getRHS r
+countChildren (ParseRule i r) = length $ filter (\ rc -> case rc of
+                                                           NTChar i True -> True
+                                                           _ -> False) $ getRHS r
 countChildren (ParseChar c) = 1
 
 --- find BLs and WLs
@@ -51,9 +56,15 @@ getTs = rmdups. foldr (\ rc xs -> case rc of
                                     TChar cs -> cs : xs
                                     _ -> xs) []
 
+
+getNTTrues :: [RuleChar] -> [NT]
+getNTTrues = rmdups . foldr (\ rc xs -> case rc of
+                                          NTChar cs True -> cs : xs
+                                          _ -> xs) []
+
 getNTs :: [RuleChar] -> [NT]
 getNTs = rmdups . foldr (\ rc xs -> case rc of
-                                      NTChar cs -> cs : xs
+                                      NTChar cs _ -> cs : xs
                                       _ -> xs) []
 
 getBLs :: [RuleChar] -> [[Char]]
@@ -82,15 +93,15 @@ convertToRuleChars ntStr rStr = let (a,b) = break (\ c -> c `elem` ntStr) rStr
                                     in case (a, b) of
                                          ([], []) -> []
                                          (a, []) -> [TChar a]
-                                         ([], c:cs) -> (NTChar (fromJust $ elemIndex c ntStr)) : convertToRuleChars ntStr cs
-                                         (a, c:cs) -> (TChar a) : (NTChar (fromJust $ elemIndex c ntStr)): convertToRuleChars ntStr cs
+                                         ([], c:cs) -> (NTChar (fromJust $ elemIndex c ntStr) True) : convertToRuleChars ntStr cs
+                                         (a, c:cs) -> (TChar a) : (NTChar (fromJust $ elemIndex c ntStr) True): convertToRuleChars ntStr cs
 
 stringToRule :: [Char] -> (Char, String) -> Rule
 stringToRule ntStr (c, rStr) = case elemIndex c ntStr of
                                  Just i -> Rule (i, convertToRuleChars ntStr rStr)
                                  Nothing -> error "LHS of rule is not a NTChar"
 
---- makes Grammar from list of nonterminals and list of rules
+--makes Grammar from list of nonterminals and list of rules
 mkGrammar :: [Char] -> [(Char, String)] -> Grammar
 mkGrammar ntStr rStrs = let n = length ntStr
                             rules = zip [0..] $ map (stringToRule ntStr) rStrs

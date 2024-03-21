@@ -11,6 +11,7 @@ import Test.QuickCheck
 
 import Grammar
 import LL1Parser
+import MarkedString
 
 data ParseStepSimple = R Int | C Char
   deriving (Eq, Show)
@@ -76,24 +77,37 @@ testTreeQC t = mkTree (flatten ( treeWithChildren t)) == t
 
 ----------------testcases----------------------------------
 
-g1 = mkGrammar "ST" [('S', "T"), ('S', "(S+T)"), ('T', "a")]
-t1 = fromList [ ((0,Just (TChar "(")) , (1,Rule (0,[TChar "(",NTChar 0,TChar "+",NTChar 1,TChar ")"])))
-              , ((0,Just (TChar "a")) , (0,Rule (0,[NTChar 1])))
+-- markerRepresentation :: Marker -> Char
+-- markerRepresentation (NTBracket True) = '_'
+-- markerRepresentation (NTBracket False) = '^'
+-- markerRepresentation RuleDivider = '$'
+-- markerRepresentation Arrow = '~'
+-- markerRepresentation (WildCardBracket True) = '!'
+-- markerRepresentation (WildCardBracket False) = '@'
+-- markerRepresentation WildCardSeperator = '&'
+
+
+--g1 = mkGrammar "ST" [('S', "T"), ('S', "(S+T)"), ('T', "a")]
+g1 = stringToGrammar "_S_~_T_$_S_~(_S_+_T_)$_T_~a"
+t1 = fromList [ ((0,Just (TChar "(")) , (1,Rule (0,[TChar "(",NTChar 0 True,TChar "+",NTChar 1 True,TChar ")"])))
+              , ((0,Just (TChar "a")) , (0,Rule (0,[NTChar 1 True])))
               , ((1,Just (TChar "a")) , (2,Rule (1,[TChar "a"])))]
 testcases1 = [ ("a", Right [R 0,R 2])
              , ("(a+a)", Right [R 1,R 0,R 2,R 2])
              , ("a+a", Left $ StringTooLong "+a")
              , ("(a+", Left $ NoRule 1 "")]
 
-g2 = mkGrammarFromRules [('S', "aa"), ('S', "ab")]
+--g2 = mkGrammarFromRules [('S', "aa"), ('S', "ab")]
+g2 = stringToGrammar "_S_~aa$_S_~ab"
 t2 = fromList [ ((0,Just $ TChar "aa") , (0,Rule (0,[TChar "aa"])))
               , ((0,Just $ TChar "ab") , (1,Rule (0,[TChar "ab"])))]
 testcases2 = [("aa", Right [R 0]), ("ab", Right [R 1])]
 
-g3 = Grammar 2 ["\"" , "a"] [ ( 0 , Rule ( 0, [TChar "\"" , NTChar 1, TChar "\""]) ) , (1, Rule ( 1, [BL ['\"'], NTChar 1]))  , (2, Rule ( 1, [])) ]
-t3 = fromList [ ((0,Just (TChar "\"")) , (0,Rule (0,[TChar "\"",NTChar 1,TChar "\""])))
+--g3 = Grammar 2 ["\""] [ ( 0 , Rule ( 0, [TChar "\"" , NTChar 1 True, TChar "\""]) ) , (1, Rule ( 1, [BL ['\"'], NTChar 1 True]))  , (2, Rule ( 1, [])) ]
+g3 = stringToGrammar "_S_~\"_T_\"$_T_~!\"!_T_$_T_~"
+t3 = fromList [ ((0,Just (TChar "\"")) , (0,Rule (0,[TChar "\"",NTChar 1 True,TChar "\""])))
               , ((1,Nothing) , (2,Rule (1,[])))
-              , ((1,Just (BL "\"")) , (1,Rule (1,[BL "\"",NTChar 1])))]
+              , ((1,Just (BL "\"")) , (1,Rule (1,[BL "\"",NTChar 1 True])))]
 testcases3 = [ ("\"\"", Right [R 0,R 2])
              , ("\"abc\"", Right [R 0,R 1,C 'a',R 1,C 'b',R 1,C 'c',R 2])
              , ("\"", Left $ MissingCharacters "\"")
@@ -104,6 +118,10 @@ testtrees3 = [ ("\"\"", Right Node {rootLabel = R 0, subForest = [Node {rootLabe
              , ("\"abc\"", Right Node {rootLabel = R 0, subForest = [Node {rootLabel = R 1, subForest = [Node {rootLabel = C 'a', subForest = [Node {rootLabel = R 1, subForest = [Node {rootLabel = C 'b', subForest = [Node {rootLabel = R 1, subForest = [Node {rootLabel = C 'c', subForest = [Node {rootLabel = R 2, subForest = []}]}]}]}]}]}]}]} )
              ]
 
+g4 = stringToGrammar "_0_~_1_$_1_~_2_$_2_~_0_"
+e4 = Left (InfiniteLoop (0,Nothing))
+
+
 
 main = do
   print $ testTable g1 (Right t1)
@@ -113,4 +131,5 @@ main = do
   print $ testTable g3 (Right t3)
   print $ testParse g3 testcases3
   print $ testTree g3 testtrees3
+  print $ testTable g4 e4
   quickCheck (testTreeQC :: Tree Int -> Bool) 

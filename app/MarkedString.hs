@@ -11,7 +11,7 @@ import Data.List.Split
 
 import Grammar
 
-data Marker = NTBracket   -- Bool ; for hidden NTs
+data Marker = NTBracket Bool  -- for hidden NTs
             | RuleDivider -- seperates different rules 
             | Arrow -- seperates LHS and RHS of rules
             | WildCardBracket Bool -- for BLs ad WLs
@@ -19,7 +19,8 @@ data Marker = NTBracket   -- Bool ; for hidden NTs
   deriving (Eq, Show)
 
 markerRepresentation :: Marker -> Char
-markerRepresentation NTBracket = '_'
+markerRepresentation (NTBracket True) = '_'
+markerRepresentation (NTBracket False) = '^'
 markerRepresentation RuleDivider = '$'
 markerRepresentation Arrow = '~'
 markerRepresentation (WildCardBracket True) = '!'
@@ -44,11 +45,12 @@ markedCharToChar mc = case mc of
   C c -> c
 
 markedStringToString :: MarkedString -> String
-markedStringToString cs = map markedCharToChar cs
+markedStringToString = map markedCharToChar
 
 charToMarkedChar :: Char -> MarkedChar
 charToMarkedChar c = case c of
-  '_' -> M NTBracket
+  '_' -> M (NTBracket True)
+  '^' -> M (NTBracket False)
   '$' -> M RuleDivider
   '~' -> M Arrow
   '!' -> M (WildCardBracket True)
@@ -61,44 +63,43 @@ stringToMarkedString = map charToMarkedChar
 
 markedStringToRule :: (Monad m, MonadState [String] m)
  => MarkedString -> m Rule
-markedStringToRule (M NTBracket : ms) =
-  do (lhs, rest) <- (parseNT "") ms
+markedStringToRule (M (NTBracket b) : mcs) =
+  do (lhs, rest) <- parseNT "" mcs b
      let rhs = parseArrow rest
      rulechars <- parse rhs
      return $ Rule (lhs, rulechars)
-       where parse :: (Monad m, MonadState [String] m)
-               => MarkedString -> m [RuleChar]
-             parse [] = return []
-             parse (c:cs) = case c of
-               M NTBracket -> do (j, rest) <- parseNT "" cs
-                                 (NTChar j :) <$> parse rest
+       where parse [] = return []
+             parse (mc:mcs) = case mc of
+               M (NTBracket b) -> do (j, rest) <- parseNT "" mcs b
+                                     (NTChar j b:) <$> parse rest
                M RuleDivider -> error "unexpected RuleDivider"
                M Arrow -> error "unexpected arrow"
-               M (WildCardBracket b) -> do let (list, rest) = parseWC [] cs b
+               M (WildCardBracket b) -> do let (list, rest) = parseWC [] mcs b
                                            case b of True  -> (BL list :) <$> parse rest
                                                      False -> (WL list :) <$> parse rest
-               C char -> do let (t, rest) = parseT [char] cs
-                            (TChar t :) <$> parse rest                            
-             parseNT _ [] = error "no closing NT bracket"               
-             parseNT label (c:cs)
-               = case c of C x -> parseNT (label ++ [x]) cs
-                           M NTBracket -> do names <- get
-                                             case elemIndex label names of
-                                               Just i -> return (i, cs)
-                                               Nothing -> modify (\ ls -> ls ++  [label]) >> return (length names, cs)
-                           _ -> error "unexpected symbol in NT label"
-             parseArrow (c:cs)
-               = case c of M Arrow -> cs
-                           _ -> error "expected arrow"
-             parseWC list (c:c':cs) b = case (c, c') of
-               (C x, M WildCardSeperator) -> parseWC (x : list) cs b
-               (C x , M (WildCardBracket b)) -> ((x:list), cs)
+               C c -> do let (t, rest) = parseT [c] mcs
+                         (TChar t :) <$> parse rest
+             parseNT _ [] b = error "no closing NT bracket"               
+             parseNT lebal (mc:mcs) b
+               = case mc of C c -> parseNT (c : lebal) mcs b
+                            M (NTBracket b) -> do names <- get
+                                                  let label = reverse lebal
+                                                  case elemIndex label names of
+                                                    Just i -> return (i, mcs)
+                                                    Nothing -> modify ( ++  [label]) >> return (length names, mcs)
+                            _ -> error "unexpected symbol in NT label"
+             parseArrow (mc:mcs)
+               = case mc of M Arrow -> mcs
+                            _ -> error "expected arrow"
+             parseWC list (mc:mc':mcs) b = case (mc, mc') of
+               (C c, M WildCardSeperator) -> parseWC (c : list) mcs b
+               (C c , M (WildCardBracket b)) -> ((c:list), mcs)
                (_,_) -> error "wildcard list"
              parseWC list _ b = error "wildcard list"
-             parseT str (c:cs) = case c of
-               C char -> parseT (str ++ [char]) cs
-               _ -> (str, (c:cs))
-             parseT str [] = (str, [])
+             parseT str (mc:mcs) = case mc of
+               C c -> parseT (c:str) mcs
+               _ -> (reverse str, (mc:mcs))
+             parseT str [] = (reverse str, [])
 markedStringToRule _ = error "expected NTBracket at start of rule"
 
 markedStringToGrammar :: MarkedString -> Grammar
