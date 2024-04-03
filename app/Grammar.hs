@@ -9,7 +9,7 @@ type T = String
 
 data RuleChar = NTChar NT Bool -- true: NT appears in parse tree; false: NT hidden
               | TChar T
-              | WildCard [Char] Bool -- true for WhiteList (c in list)
+              | WildCard Bool [Char] -- true for WhiteList (c in list)
                                      -- false for BlackList (c notin list)
   deriving (Show, Eq, Ord)
 
@@ -20,9 +20,11 @@ newtype Rule = Rule (NT, [RuleChar])
 data Grammar = Grammar {
       n     :: Int    -- number of NTs -> assumed as [0..n-1]
     , ts    :: [T]
+    , wls   :: [[Char]]
+    , bls   :: [[Char]]
     , rules :: [(Int,Rule)]
                        }
-  deriving Show
+--  deriving Show
 
 data ParseStep = ParseRule Int Rule | ParseChar Char
 instance Show ParseStep where
@@ -34,17 +36,20 @@ type ParseTree = Tree ParseStep
 ---------------------basics grammar fcts---------------------
 
 checkGrammar :: Grammar -> Bool
-checkGrammar (Grammar n ts rules) = all (\ (Rule (i, ls)) -> i < n &&
-                                            all (\ s -> case s of NTChar j _ -> j < n
-                                                                  TChar s  -> s `elem` ts) ls)
-                                    $ map snd rules
+checkGrammar (Grammar n ts wls bls rules)
+  = all (\ (Rule (i, ls)) -> i < n &&
+          all (\ s -> case s of NTChar j _ -> j < n
+                                TChar s  -> s `elem` ts
+                                WildCard True cs -> cs `elem` wls
+                                WildCard False cs -> cs `elem` bls)
+          ls) $ map snd rules
 
 -- counts the number of children a rule has in the parse tree
 countChildren :: ParseStep -> Int
 countChildren (ParseRule i r) = length $ filter isNTVisible $ getRHS r
 countChildren (ParseChar c) = 1
 
---- find BLs and WLs
+--- filter for certain types of RuleChar
 
 isNTVisible :: RuleChar -> Bool
 isNTVisible (NTChar _ True) = True
@@ -63,7 +68,7 @@ isT (TChar _) = True
 isT _ = False
 
 isWC :: Bool -> RuleChar -> Bool
-isWC b' (WildCard _ b) = b==b'
+isWC b' (WildCard b _) = b==b'
 isWC _ _ = False
 
 getRHS :: Rule -> [RuleChar]
@@ -77,6 +82,9 @@ getNTVisibles = rmdups . map (\ (NTChar i _) -> i) . filter isNTVisible
 
 getTs :: [RuleChar] -> [T]
 getTs = rmdups. map (\ (TChar s) -> s) . filter isT
+
+getWCs :: Bool -> [RuleChar] -> [[Char]]
+getWCs b = rmdups. map (\ (WildCard _ cs) -> cs) . filter (isWC b)
 
 ---convert strings to rules
 
@@ -101,7 +109,7 @@ mkGrammar :: [Char] -> [(Char, String)] -> Grammar
 mkGrammar ntStr rStrs = let n = length ntStr
                             rules = zip [0..] $ map (stringToRule ntStr) rStrs
                             ts = rmdups $ concatMap (getTs . getRHS . snd) $ rules
-                         in (Grammar n ts rules)
+                         in (Grammar n ts [] [] rules)
 
 
 --- makes Grammar only from list of rules (assumes the nonterminals are all symbols on lhs of rules)

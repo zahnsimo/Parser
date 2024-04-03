@@ -29,7 +29,7 @@ markerRepresentation (WildCardBracket False) = '@'
 markerRepresentation WildCardSeperator = '&'
 
 data MarkedChar = C Char | M Marker
-  deriving (Eq, Show)
+  deriving Eq
 
 type MarkedString = [MarkedChar]
 
@@ -76,7 +76,7 @@ markedStringToRule (M (NTBracket b) : mcs) =
                M RuleDivider -> error "unexpected RuleDivider"
                M Arrow -> error "unexpected arrow"
                M (WildCardBracket b) -> do let (list, rest) = parseWC [] mcs b
-                                           (WildCard list b :) <$> parse rest
+                                           (WildCard b list :) <$> parse rest
                C c -> do let (t, rest) = parseT [c] mcs
                          (TChar t :) <$> parse rest
              parseNT _ [] b = error "no closing NT bracket"               
@@ -108,10 +108,34 @@ markedStringToGrammar ms = let split = splitOn [M RuleDivider] ms
                                rulesWithInd = zip [0..] rules
                                n = length labels
                                ts = rmdups $ concatMap (getTs . getRHS) $ rules
-                           in (Grammar n ts rulesWithInd)
+                               wls = rmdups $ concatMap (getWCs True . getRHS) $ rules
+                               bls = rmdups $ concatMap (getWCs False . getRHS) $ rules
+                           in (Grammar n ts wls bls rulesWithInd)
 
 stringToGrammar :: String -> Grammar
 stringToGrammar = markedStringToGrammar . stringToMarkedString
-                                    
-ms = stringToMarkedString "_abc_~!g!"
-ms2 = stringToMarkedString "_abc_~def_i_e"
+
+
+instance Show MarkedChar where
+  show (M Arrow) = "->"
+  show (M RuleDivider) = "\n"
+  show mc = [markedCharToChar mc]
+
+instance Show Grammar where
+  show = concatMap show . grammarToMarkedString
+
+ruleCharToMarkedString :: RuleChar -> MarkedString
+ruleCharToMarkedString (NTChar i b) = [M (NTBracket b)] ++ map C (show i) ++ [M (NTBracket b)]
+ruleCharToMarkedString (TChar s) = map C s
+ruleCharToMarkedString (WildCard b cs) =
+  [M (WildCardBracket b)] ++ intersperse (M WildCardSeperator) (map C cs) ++ [M (WildCardBracket b)]
+
+ruleToMarkedString :: Rule -> MarkedString
+ruleToMarkedString (Rule (i, rcs)) = ruleCharToMarkedString (NTChar i True) ++ [M Arrow] ++ concatMap ruleCharToMarkedString rcs
+
+grammarToMarkedString :: Grammar -> MarkedString
+grammarToMarkedString g = concat $ intersperse ([M RuleDivider])
+  (map ruleToMarkedString (map snd (rules g)))
+
+
+ms = stringToMarkedString "_abc_~!g!$_abc_~def_i_e"

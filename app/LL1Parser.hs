@@ -21,8 +21,8 @@ import Grammar
 type Table = Map (NT, Maybe RuleChar) (Int, Rule)
 data ParseInfo = ParseInfo {
     table :: Table
-  , stringChars :: [RuleChar]
-  , wildCardLists :: Bool -> [[Char]]
+  , wlsInf :: [[Char]]
+  , blsInf :: [[Char]]
   , maxPrefixLength :: Int
   }
 --  deriving Show
@@ -39,8 +39,8 @@ data ParseError =
   | StringTooLong String -- returns the rest of the string
   | NoRule NT String -- [Maybe RuleChar]
     -- expects to parse some rule, returns top NT from stack and rest of string
-  | UnexpectedCharWildCard [Char] Char Bool
-  | MissingCharWildCard [Char] Bool
+  | UnexpectedCharacterWildCard [Char] Char Bool
+  | MissingCharacterWildCard [Char] Bool
   deriving (Eq, Show)
 
 ------------------------mkTable---------------------------------------------------
@@ -82,12 +82,11 @@ findRules (i,c) = do lmax <- asks (length . rules)
 
 mkTable :: (Monad m, MonadError TableError m)
   => Grammar -> m Table
-mkTable gr@(Grammar n ts rules)
+mkTable gr@(Grammar n ts wls bls rules)
  = fromList <$> catMaybes <$>
-  traverse helper [(i, c) | i <- [0..(n-1)] , c <-Nothing : (rmdups $ concatMap (map Just . filter (not . isNT) . getRHS . snd) rules)
-                    -- ( map (Just . TChar) ts) ++
-                    -- (rmdups $ concatMap (map Just . filter (isWC False) . getRHS . snd ) rules) ++
-                    -- (rmdups $ concatMap (map Just . filter (isWC True) . getRHS . snd ) rules)
+  traverse helper [(i, c) | i <- [0..(n-1)] , c <-Nothing : map (Just . TChar) ts
+                    ++ map (Just . WildCard True) wls
+                    ++ map (Just . WildCard False) bls
                      ]
   where helper (i,c) = do rls <- runReaderT (findRules (i,c)) gr
                           case rls of [] -> return Nothing
@@ -96,12 +95,10 @@ mkTable gr@(Grammar n ts rules)
 
 mkParseInfo :: (Monad m, MonadError TableError m)
   => Grammar -> m ParseInfo
-mkParseInfo gr@(Grammar n ts rules)
+mkParseInfo gr@(Grammar n ts wls bls rules)
   = do table <- mkTable gr
-       let stringChars = rmdups $ catMaybes $ map snd $ keys table
-       let wildCardLists b = map (\ (WildCard cs _) -> cs) $ filter (isWC b) stringChars
-       let maxPrefixLength = maximum $ (map length) $ getTs stringChars
-       return $ ParseInfo table stringChars wildCardLists maxPrefixLength
+       let maxPrefixLength = maximum $ (map length) ts
+       return $ ParseInfo table wls bls maxPrefixLength
 
 
 -----------------------parse------------------------------------
@@ -136,13 +133,14 @@ chooseRule i "" = do rule <- asks $ lookup (i, Nothing) . table
                      case rule of
                        Just r -> return r
                        Nothing -> throwError $ NoRule i ""
-chooseRule i s = do wildCardLists <- asks wildCardLists
+chooseRule i s = do wls <- asks wlsInf
+                    bls <- asks blsInf
                     maxPrefixLength <- asks maxPrefixLength
                     let prefixes = map TChar $ map (\ l -> take l s) $ downFrom maxPrefixLength
                     let h = head s
-                    let wls = map (\ cs -> WildCard cs True) $ filter (h `elem`) $ wildCardLists True
-                    let bls = map (\ cs -> WildCard cs False)  $ filter (not . (h `elem`)) $ wildCardLists False
-                    rule <- chooseRuleHelper i (map Just (prefixes ++ wls ++ bls) ++ [Nothing])
+                    let wlsFiltered = map (WildCard True) $ filter (h `elem`) wls
+                    let blsFiltered = map (WildCard False) $ filter (not . (h `elem`)) bls
+                    rule <- chooseRuleHelper i (map Just (prefixes ++ wlsFiltered ++ blsFiltered) ++ [Nothing])
                     case rule of
                       Just r -> return r
                       Nothing -> throwError $ NoRule i s
@@ -168,11 +166,11 @@ parseWithStack (NTChar i True : xs) s
 parseWithStack (NTChar i False : xs) s
   = do (substeps, s') <- parseWithStack [NTChar i True] s
        parseWithStack xs s'
-parseWithStack (WildCard cs b : xs) "" = throwError $ MissingCharWildCard cs b
-parseWithStack (WildCard cs b : xs) (c:s)
+parseWithStack (WildCard b cs : xs) "" = throwError $ MissingCharacterWildCard cs b
+parseWithStack (WildCard b cs : xs) (c:s)
   = do case (c `elem` cs) == b of
          True -> changefst ((ParseChar c) :) <$> parseWithStack xs s
-         False -> throwError $ UnexpectedCharWildCard cs c b
+         False -> throwError $ UnexpectedCharacterWildCard cs c b
 
 --splitAt, but returns error if i > length list
 splitAtExcact :: Int -> [a] -> ([a], [a])
