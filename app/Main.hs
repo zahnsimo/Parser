@@ -10,7 +10,6 @@ import MarkedString
 
 ----grammars
 
--- markerRepresentation :: Marker -> Char
 -- markerRepresentation (NTBracket True) = '_'
 -- markerRepresentation (NTBracket False) = '^'
 -- markerRepresentation RuleDivider = '$'
@@ -19,9 +18,6 @@ import MarkedString
 -- markerRepresentation (WildCardBracket False) = '@'
 -- markerRepresentation WildCardSeperator = '&'
 
-
-testG = mkGrammar "ST" [('S', "T"), ('S', "(S+T)"), ('T', "a")]
-testI = unwrapExcept $ mkParseInfo testG
 
 gblub = stringToGrammar "_S_~_T_$_S_~(^A^_S_^A^+^A^_T_^A^)$_T_~a$^A^~$^A^~ "
 iblub = unwrapExcept $ mkParseInfo gblub

@@ -1,3 +1,5 @@
+{-# LANGUAGE TypeFamilies #-}
+
 module Grammar where
 
 import Data.List
@@ -16,15 +18,31 @@ data RuleChar = NTChar NT Bool -- true: NT appears in parse tree; false: NT hidd
 newtype Rule = Rule (NT, [RuleChar])
   deriving (Show, Eq)
 
+data Init
+data Parse
+
+type family T_Info set
+type instance T_Info Init = [T]
+type instance T_Info Parse = Int
+
+getMaxPrefixLength :: T_Info Init -> T_Info Parse
+getMaxPrefixLength = maximum . map length
+
+initToParse :: Alphabet Init -> Alphabet Parse
+initToParse (ABC n ts wls bls) = ABC n (getMaxPrefixLength ts) wls bls
+
+data Alphabet set = ABC {
+    n      :: Int
+  , t_info :: T_Info set
+  , wls    :: [[Char]]
+  , bls    :: [[Char]]
+                    }
+
 
 data Grammar = Grammar {
-      n     :: Int    -- number of NTs -> assumed as [0..n-1]
-    , ts    :: [T]
-    , wls   :: [[Char]]
-    , bls   :: [[Char]]
+      abc_init :: Alphabet Init
     , rules :: [(Int,Rule)]
                        }
---  deriving Show
 
 data ParseStep = ParseRule Int Rule | ParseChar Char
 instance Show ParseStep where
@@ -36,7 +54,7 @@ type ParseTree = Tree ParseStep
 ---------------------basics grammar fcts---------------------
 
 checkGrammar :: Grammar -> Bool
-checkGrammar (Grammar n ts wls bls rules)
+checkGrammar (Grammar (ABC n ts wls bls) rules)
   = all (\ (Rule (i, ls)) -> i < n &&
           all (\ s -> case s of NTChar j _ -> j < n
                                 TChar s  -> s `elem` ts
@@ -86,33 +104,7 @@ getTs = rmdups. map (\ (TChar s) -> s) . filter isT
 getWCs :: Bool -> [RuleChar] -> [[Char]]
 getWCs b = rmdups. map (\ (WildCard _ cs) -> cs) . filter (isWC b)
 
----convert strings to rules
 
 rmdups :: (Eq a, Ord a) => [a] -> [a]
 rmdups xs = map head $ group $ sort xs
 
-convertToRuleChars :: [Char] -> String -> [RuleChar]
-convertToRuleChars ntStr rStr = let (a,b) = break (\ c -> c `elem` ntStr) rStr
-                                    in case (a, b) of
-                                         ([], []) -> []
-                                         (a, []) -> [TChar a]
-                                         ([], c:cs) -> (NTChar (fromJust $ elemIndex c ntStr) True) : convertToRuleChars ntStr cs
-                                         (a, c:cs) -> (TChar a) : (NTChar (fromJust $ elemIndex c ntStr) True): convertToRuleChars ntStr cs
-
-stringToRule :: [Char] -> (Char, String) -> Rule
-stringToRule ntStr (c, rStr) = case elemIndex c ntStr of
-                                 Just i -> Rule (i, convertToRuleChars ntStr rStr)
-                                 Nothing -> error "LHS of rule is not a NTChar"
-
---makes Grammar from list of nonterminals and list of rules
-mkGrammar :: [Char] -> [(Char, String)] -> Grammar
-mkGrammar ntStr rStrs = let n = length ntStr
-                            rules = zip [0..] $ map (stringToRule ntStr) rStrs
-                            ts = rmdups $ concatMap (getTs . getRHS . snd) $ rules
-                         in (Grammar n ts [] [] rules)
-
-
---- makes Grammar only from list of rules (assumes the nonterminals are all symbols on lhs of rules)
-mkGrammarFromRules :: [(Char, String)] -> Grammar
-mkGrammarFromRules rStrs = let ntStr = rmdups $ map fst rStrs
-                           in mkGrammar ntStr rStrs 

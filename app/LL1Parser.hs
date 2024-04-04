@@ -20,13 +20,11 @@ import Grammar
 
 type Table = Map (NT, Maybe RuleChar) (Int, Rule)
 data ParseInfo = ParseInfo {
-    table :: Table
-  , wlsInf :: [[Char]]
-  , blsInf :: [[Char]]
-  , maxPrefixLength :: Int
+      table :: Table
+    , abc_parse :: Alphabet Parse
   }
 --  deriving Show
---contains the table, a list of all RuleChars (excluding NTChars) and maximumPrefixLength
+--abc_parse contains number of NTs, wls , bls and maxPrefixLength of Ts
 
 data TableError = NonDeterministic ((NT, Maybe RuleChar), [Int])
                 | InfiniteLoop (NT, Maybe RuleChar) --[NT]
@@ -82,7 +80,7 @@ findRules (i,c) = do lmax <- asks (length . rules)
 
 mkTable :: (Monad m, MonadError TableError m)
   => Grammar -> m Table
-mkTable gr@(Grammar n ts wls bls rules)
+mkTable gr@(Grammar (ABC n ts wls bls) rules)
  = fromList <$> catMaybes <$>
   traverse helper [(i, c) | i <- [0..(n-1)] , c <-Nothing : map (Just . TChar) ts
                     ++ map (Just . WildCard True) wls
@@ -95,18 +93,14 @@ mkTable gr@(Grammar n ts wls bls rules)
 
 mkParseInfo :: (Monad m, MonadError TableError m)
   => Grammar -> m ParseInfo
-mkParseInfo gr@(Grammar n ts wls bls rules)
+mkParseInfo gr
   = do table <- mkTable gr
-       let maxPrefixLength = maximum $ (map length) ts
-       return $ ParseInfo table wls bls maxPrefixLength
+       let abc_parse = initToParse $ abc_init gr
+       return $ ParseInfo table abc_parse
 
 
 -----------------------parse------------------------------------
 
-isPrefix :: String -> String -> Bool
-isPrefix [] _ = True
-isPrefix _ [] = False
-isPrefix (c:s) (c':s') = c == c' && isPrefix s s'
 
 removePrefix :: (Monad m, MonadError ParseError m) =>
   String -> String -> m String
@@ -133,9 +127,7 @@ chooseRule i "" = do rule <- asks $ lookup (i, Nothing) . table
                      case rule of
                        Just r -> return r
                        Nothing -> throwError $ NoRule i ""
-chooseRule i s = do wls <- asks wlsInf
-                    bls <- asks blsInf
-                    maxPrefixLength <- asks maxPrefixLength
+chooseRule i s = do (ABC n maxPrefixLength wls bls) <- asks abc_parse
                     let prefixes = map TChar $ map (\ l -> take l s) $ downFrom maxPrefixLength
                     let h = head s
                     let wlsFiltered = map (WildCard True) $ filter (h `elem`) wls

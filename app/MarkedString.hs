@@ -110,7 +110,7 @@ markedStringToGrammar ms = let split = splitOn [M RuleDivider] ms
                                ts = rmdups $ concatMap (getTs . getRHS) $ rules
                                wls = rmdups $ concatMap (getWCs True . getRHS) $ rules
                                bls = rmdups $ concatMap (getWCs False . getRHS) $ rules
-                           in (Grammar n ts wls bls rulesWithInd)
+                           in (Grammar (ABC n ts wls bls) rulesWithInd)
 
 stringToGrammar :: String -> Grammar
 stringToGrammar = markedStringToGrammar . stringToMarkedString
