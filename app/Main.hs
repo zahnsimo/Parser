@@ -43,8 +43,8 @@ i3 = unwrapExcept $ mkParseInfo g3
 
 main = do
   s <- getLine
-  let rules = unwrapExcept $ (runReaderT (parse s) i3)
-  print rules
+  let (rules, rest) = unwrapExcept $ (runReaderT (parse "S" s) i3)
+  print (rules, rest)
   let tree = mkParseTree rules
   --print tree
   putStr $ drawTree $ fmap show tree

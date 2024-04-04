@@ -32,7 +32,8 @@ initToParse :: Alphabet Init -> Alphabet Parse
 initToParse (ABC n ts wls bls) = ABC n (getMaxPrefixLength ts) wls bls
 
 data Alphabet set = ABC {
-    n      :: Int
+--    n      :: Int
+    nts    :: [String]
   , t_info :: T_Info set
   , wls    :: [[Char]]
   , bls    :: [[Char]]
@@ -54,13 +55,14 @@ type ParseTree = Tree ParseStep
 ---------------------basics grammar fcts---------------------
 
 checkGrammar :: Grammar -> Bool
-checkGrammar (Grammar (ABC n ts wls bls) rules)
+checkGrammar (Grammar (ABC nts ts wls bls) rules)
   = all (\ (Rule (i, ls)) -> i < n &&
           all (\ s -> case s of NTChar j _ -> j < n
                                 TChar s  -> s `elem` ts
                                 WildCard True cs -> cs `elem` wls
                                 WildCard False cs -> cs `elem` bls)
           ls) $ map snd rules
+    where n = length nts
 
 -- counts the number of children a rule has in the parse tree
 countChildren :: ParseStep -> Int

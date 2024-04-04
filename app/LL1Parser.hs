@@ -34,11 +34,12 @@ data TableError = NonDeterministic ((NT, Maybe RuleChar), [Int])
 data ParseError =
     UnexpectedCharacter Char Char -- returns the expected char vs the actual char
   | MissingCharacters String -- returns the next chars that were expected
-  | StringTooLong String -- returns the rest of the string
+--  | StringTooLong String -- returns the rest of the string
   | NoRule NT String -- [Maybe RuleChar]
     -- expects to parse some rule, returns top NT from stack and rest of string
   | UnexpectedCharacterWildCard [Char] Char Bool
   | MissingCharacterWildCard [Char] Bool
+  | InvalidStartSymbol String
   deriving (Eq, Show)
 
 ------------------------mkTable---------------------------------------------------
@@ -80,7 +81,7 @@ findRules (i,c) = do lmax <- asks (length . rules)
 
 mkTable :: (Monad m, MonadError TableError m)
   => Grammar -> m Table
-mkTable gr@(Grammar (ABC n ts wls bls) rules)
+mkTable gr@(Grammar (ABC nts ts wls bls) rules)
  = fromList <$> catMaybes <$>
   traverse helper [(i, c) | i <- [0..(n-1)] , c <-Nothing : map (Just . TChar) ts
                     ++ map (Just . WildCard True) wls
@@ -90,6 +91,7 @@ mkTable gr@(Grammar (ABC n ts wls bls) rules)
                           case rls of [] -> return Nothing
                                       [x] -> return $ Just ((i,c), x)
                                       ls ->  throwError $ NonDeterministic ((i,c), map fst ls)
+        n = length nts
 
 mkParseInfo :: (Monad m, MonadError TableError m)
   => Grammar -> m ParseInfo
@@ -127,7 +129,7 @@ chooseRule i "" = do rule <- asks $ lookup (i, Nothing) . table
                      case rule of
                        Just r -> return r
                        Nothing -> throwError $ NoRule i ""
-chooseRule i s = do (ABC n maxPrefixLength wls bls) <- asks abc_parse
+chooseRule i s = do (ABC nts maxPrefixLength wls bls) <- asks abc_parse
                     let prefixes = map TChar $ map (\ l -> take l s) $ downFrom maxPrefixLength
                     let h = head s
                     let wlsFiltered = map (WildCard True) $ filter (h `elem`) wls
@@ -139,11 +141,12 @@ chooseRule i s = do (ABC n maxPrefixLength wls bls) <- asks abc_parse
                                        
                        
 parse :: (Monad m, MonadReader ParseInfo m, MonadError ParseError m) =>
-  String -> m [ParseStep]
-parse s = do (steps, rest) <- parseWithStack [NTChar 0 True] s
-             case rest of "" -> return steps
-                          _ -> throwError $ StringTooLong rest
-
+  String -> String -> m ([ParseStep], String)
+parse nt_start s = do labels <- asks (nts . abc_parse)
+                      let ind = elemIndex nt_start labels
+                      case ind of Just i -> parseWithStack [NTChar i True] s
+                                  Nothing -> throwError $ InvalidStartSymbol nt_start
+                    
 
 changefst :: (a -> a) -> (a,b) -> (a,b)
 changefst f (x,y) = (f x, y)
